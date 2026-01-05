@@ -1,0 +1,26 @@
+{
+  "port_range": {
+    "start": 3000,
+    "end": 9000,
+    "comment": "Default port range for auto-assignment. Users can override in ~/.yardmaster/config.json"
+  },
+  "ngrok": {
+    "auth_token": "",
+    "region": "us",
+    "comment": "ngrok configuration. REQUIRED: Set auth token via NGROK_AUTH_TOKEN env var or user config"
+  },
+  "registry": {
+    "path": "~/.yardmaster/registry.json",
+    "comment": "Path to registry JSON file. Will be created automatically."
+  },
+  "server": {
+    "name": "yardmaster",
+    "version": "1.0.0",
+    "description": "Port registry with ngrok integration for AI agents"
+  },
+  "phase2": {
+    "comment": "Phase 2 features (not implemented in MVP)",
+    "dashboard_auth_token": null,
+    "multi_machine_aggregation": false
+  }
+}

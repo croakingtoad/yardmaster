@@ -8,6 +8,10 @@ pnpm-lock.yaml
 dist/
 *.tsbuildinfo
 
+# TUI binaries (Go)
+tui/yardmaster-tui
+tui/yardmaster-tui.exe
+
 # Environment
 .env
 .env.local

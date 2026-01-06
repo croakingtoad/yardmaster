@@ -10,6 +10,7 @@ Yardmaster helps AI agents (like Claude) automatically manage port allocations a
 - **🌐 ngrok Integration**: Automatic tunnel creation with public URLs
 - **🤖 MCP Server**: AI agents can register/release ports via Model Context Protocol
 - **💻 CLI**: Manual management via command-line interface
+- **🖥️ TUI**: Beautiful terminal interface built with bubbletea (see [tui/README.md](tui/README.md))
 - **💾 Persistent**: JSON-based storage survives restarts
 - **✅ Zero Mock Policy**: Real ngrok tunnels and file I/O from day one
 
@@ -87,6 +88,25 @@ yardmaster status
 yardmaster config
 ```
 
+### For Interactive Use (TUI)
+
+Launch the beautiful terminal UI for visual port management:
+
+```bash
+cd tui
+go build -o yardmaster-tui
+./yardmaster-tui
+```
+
+**TUI Features:**
+- 📊 Real-time port list with auto-refresh
+- 🔍 Detailed port information view
+- ⌨️ Vim-style keyboard navigation
+- 🎨 Styled with lipgloss
+- 🔄 Live registry updates every 5 seconds
+
+See [tui/README.md](tui/README.md) for full TUI documentation.
+
 ## Configuration
 
 ### Default Configuration
@@ -131,12 +151,23 @@ export NGROK_AUTH_TOKEN="your-token"
 # Optional - Custom ngrok domain (requires paid ngrok account)
 export NGROK_DOMAIN="locomotive.ngrok.dev"
 
+# Optional - Basic authentication (protects tunnel with HTTP Basic Auth)
+export NGROK_BASIC_AUTH="username:password"
+
+# Optional - IP restrictions (comma-separated CIDR ranges)
+export NGROK_IP_ALLOW="1.2.3.4/32,10.0.0.0/8"    # Allow only these IPs
+export NGROK_IP_DENY="192.168.1.0/24"            # Deny these IPs
+
 # Optional - Custom port range
 export PORT_RANGE_START=4000
 export PORT_RANGE_END=5000
 ```
 
-**Note**: Custom ngrok domains (`NGROK_DOMAIN`) require a paid ngrok account with reserved domains or subdomains. Leave unset to use ngrok's free random URLs.
+**Security Notes**:
+- Custom ngrok domains (`NGROK_DOMAIN`) require a paid ngrok account with reserved domains or subdomains. Leave unset to use ngrok's free random URLs.
+- **Always use authentication** (`NGROK_BASIC_AUTH`) or IP restrictions (`NGROK_IP_ALLOW`/`NGROK_IP_DENY`) for production tunnels to prevent unauthorized access.
+- Basic auth format: `username:password` (colon-separated)
+- IP restrictions use CIDR notation (e.g., `1.2.3.4/32` for single IP, `10.0.0.0/8` for range)
 
 ## Architecture
 
@@ -331,15 +362,20 @@ See `COMPLIANCE.md` for audit results.
 
 ## Phase 2 Roadmap
 
-Future enhancements (not in MVP):
+Future enhancements:
 
-- **🖥️ Web Dashboard**: Visual UI for managing ports across machines
+- **🌐 Web Dashboard**: Browser-based UI for managing ports across machines
 - **🔐 Multi-Machine Aggregation**: Auth tokens to aggregate registries
 - **📊 Analytics**: Port usage metrics and history
 - **🐳 Docker Integration**: Auto-discover containerized apps
 - **🔔 Webhooks**: Notifications on port events
 - **💾 Database**: SQLite/Postgres instead of JSON
 - **🤝 Team Features**: Multi-user/organization support
+
+**Recently Completed:**
+- ✅ Custom ngrok domains and subdomains
+- ✅ Authentication (Basic Auth, IP restrictions)
+- ✅ Terminal UI (TUI) with bubbletea
 
 ## Troubleshooting
 

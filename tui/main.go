@@ -71,6 +71,8 @@ func (a *appModel) View() string {
 		return ui.RenderDetailView(a.Model)
 	case models.ViewNewPort:
 		return ui.RenderNewPortView(a.Model)
+	case models.ViewAbout:
+		return ui.RenderAboutView(a.Model)
 	case models.ViewMenu:
 		return ui.RenderMenuView(a.Model)
 	default:

@@ -192,28 +192,54 @@ func max(a, b int) int {
 }
 
 func renderWithMenu(content string, m *models.Model) string {
-	// Simple menu overlay for now
+	// Menu overlay with cursor
 	menuStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#FFFF00")).
 		Padding(1, 2).
 		Background(lipgloss.Color("#1A1A1A"))
 
-	menuItems := []string{
-		"❯ Register New Port",
-		"  Release Selected",
-		"  Edit Security",
-		"  View Logs",
-		"  ──────────────",
-		"  Configuration",
-		"  Export Registry",
-		"  ──────────────",
-		"  About",
-		"  Quit",
+	menuItemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF"))
+
+	menuSelectedStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("#7D56F4")).
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Bold(true)
+
+	menuItems := []struct {
+		label string
+		isSeparator bool
+	}{
+		{"Register New Port", false},     // 0
+		{"Release Selected", false},      // 1
+		{"Edit Security", false},         // 2
+		{"View Logs", false},             // 3
+		{"──────────────", true},         // 4
+		{"Configuration", false},         // 5
+		{"Export Registry", false},       // 6
+		{"──────────────", true},         // 7
+		{"About", false},                 // 8
+		{"Quit", false},                  // 9
 	}
 
-	menu := headerStyle.Render("🎛️  Admin Menu") + "\n\n"
-	menu += strings.Join(menuItems, "\n")
+	menu := headerStyle.Render("Admin Menu") + "\n\n"
+
+	for i, item := range menuItems {
+		if item.isSeparator {
+			menu += "  " + mutedStyle.Render(item.label) + "\n"
+		} else {
+			cursor := "  "
+			text := item.label
+
+			if i == m.MenuCursor {
+				cursor = "❯ "
+				menu += cursor + menuSelectedStyle.Render(text) + "\n"
+			} else {
+				menu += cursor + menuItemStyle.Render(text) + "\n"
+			}
+		}
+	}
 
 	menuBox := menuStyle.Render(menu)
 

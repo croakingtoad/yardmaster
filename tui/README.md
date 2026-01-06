@@ -55,9 +55,20 @@ yardmaster-tui
 - `Esc` - Return to list view
 - `Q` - Quit
 
-#### Menu View
+#### Admin Menu
+- `↑/↓` or `k/j` - Navigate menu items
+- `Enter` - Select menu item
 - `Esc` - Close menu
-- `Enter` - Select menu item (coming soon)
+
+**Menu Actions:**
+- **Register New Port** - Show registration form (Phase 2)
+- **Release Selected** - Release currently selected port
+- **Edit Security** - Modify auth/IP settings (Phase 2)
+- **View Logs** - Show port activity (Phase 2)
+- **Configuration** - TUI settings (Phase 2)
+- **Export Registry** - Export to JSON/CSV (Phase 2)
+- **About** - Show version and info
+- **Quit** - Exit application
 
 ## Architecture
 
@@ -94,22 +105,24 @@ tui/
 ## Future Features (Phase 2+)
 
 ### Completed
-- ✅ **Port Details View** - Complete with security info
-- ✅ **Pagination** - Handle large port lists (20 per page)
-- ✅ **File Watching** - Event-driven updates with fsnotify
-- ✅ **Security Display** - Shows actual auth/IP/domain settings
-- ✅ **Error Handling** - User-visible error messages
-- ✅ **Thread Safety** - File locking prevents corruption
+- **Port Details View** - Complete with security info
+- **Pagination** - Handle large port lists (20 per page)
+- **File Watching** - Event-driven updates with fsnotify
+- **Security Display** - Shows actual auth/IP/domain settings
+- **Error Handling** - User-visible error messages
+- **Thread Safety** - File locking prevents corruption
+- **Admin Menu** - Interactive menu with working actions
+- **Release Ports** - Release ports via menu
+- **About Screen** - Version and info display
 
 ### Planned Enhancements
-- ⏳ **Delete/Release Ports** - Call `yardmaster release` command
-- ⏳ **New Port Registration** - Interactive form to register new ports
-- ⏳ **Edit Security Settings** - Update auth/IP restrictions
-- ⏳ **Copy URL** - Copy ngrok URL to clipboard
-- ⏳ **Test Connection** - Ping ngrok endpoint
-- ⏳ **View Logs** - Show port activity logs
-- ⏳ **Export Registry** - Export to JSON/CSV
-- ⏳ **Configuration** - TUI settings (page size, theme, etc.)
+- **New Port Registration** - Interactive form to register new ports
+- **Edit Security Settings** - Update auth/IP restrictions
+- **Copy URL** - Copy ngrok URL to clipboard
+- **Test Connection** - Ping ngrok endpoint
+- **View Logs** - Show port activity logs
+- **Export Registry** - Export to JSON/CSV
+- **Configuration** - TUI settings (page size, theme, etc.)
 
 ### Advanced Features
 - **Auto-detect Ports**: Discover ports not registered in yardmaster

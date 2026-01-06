@@ -1,6 +1,8 @@
 package models
 
 import (
+	"fmt"
+	"os/exec"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,6 +18,7 @@ const (
 	ViewDetail
 	ViewNewPort
 	ViewMenu
+	ViewAbout
 )
 
 type tickMsg time.Time
@@ -35,6 +38,7 @@ type Model struct {
 	Width       int
 	Height      int
 	MenuOpen    bool
+	MenuCursor  int
 	Page        int
 	PageSize    int
 
@@ -235,14 +239,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "up", "k":
-			if m.Cursor > 0 {
+			if m.MenuOpen {
+				// Navigate menu
+				if m.MenuCursor > 0 {
+					m.MenuCursor--
+					// Skip separator lines
+					if m.MenuCursor == 4 || m.MenuCursor == 7 {
+						m.MenuCursor--
+					}
+				}
+			} else if m.Cursor > 0 {
 				m.Cursor--
 			}
 
 		case "down", "j":
-			pagedPorts := m.GetPagedPorts()
-			if m.Cursor < len(pagedPorts)-1 {
-				m.Cursor++
+			if m.MenuOpen {
+				// Navigate menu (10 items total, 0-9)
+				if m.MenuCursor < 9 {
+					m.MenuCursor++
+					// Skip separator lines at indices 4 and 7
+					if m.MenuCursor == 4 || m.MenuCursor == 7 {
+						m.MenuCursor++
+					}
+				}
+			} else {
+				pagedPorts := m.GetPagedPorts()
+				if m.Cursor < len(pagedPorts)-1 {
+					m.Cursor++
+				}
 			}
 
 		case "left", "h":
@@ -256,7 +280,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
-			if m.CurrentView == ViewList && !m.MenuOpen {
+			if m.MenuOpen {
+				// Handle menu selection
+				return m.HandleMenuSelection()
+			} else if m.CurrentView == ViewList {
 				pagedPorts := m.GetPagedPorts()
 				if m.Cursor < len(pagedPorts) {
 					// Calculate actual index in full ports array
@@ -291,9 +318,117 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Continue watching for next change
 		return m, waitForFileChange(m.Watcher)
+
+	case releaseResultMsg:
+		if msg.success {
+			m.Message = fmt.Sprintf("Released port for '%s'", msg.appName)
+			m.Error = nil
+			// Refresh data to show updated registry
+			m.RefreshData()
+		} else {
+			m.Error = msg.error
+			m.Message = ""
+		}
+		return m, nil
 	}
 
 	return m, nil
+}
+
+// HandleMenuSelection processes menu item selection
+func (m *Model) HandleMenuSelection() (*Model, tea.Cmd) {
+	// Menu items: 0-Register, 1-Release, 2-EditSec, 3-Logs, 4-SEP, 5-Config, 6-Export, 7-SEP, 8-About, 9-Quit
+	switch m.MenuCursor {
+	case 0: // Register New Port
+		m.MenuOpen = false
+		m.CurrentView = ViewNewPort
+		m.Message = ""
+		return m, nil
+
+	case 1: // Release Selected
+		return m.ReleaseSelectedPort()
+
+	case 2: // Edit Security
+		m.Message = "Edit Security - Coming in Phase 2"
+		m.MenuOpen = false
+		return m, nil
+
+	case 3: // View Logs
+		m.Message = "View Logs - Coming in Phase 2"
+		m.MenuOpen = false
+		return m, nil
+
+	case 5: // Configuration
+		m.Message = "Configuration - Coming in Phase 2"
+		m.MenuOpen = false
+		return m, nil
+
+	case 6: // Export Registry
+		m.Message = "Export Registry - Coming in Phase 2"
+		m.MenuOpen = false
+		return m, nil
+
+	case 8: // About
+		m.MenuOpen = false
+		m.CurrentView = ViewAbout
+		return m, nil
+
+	case 9: // Quit
+		return m, tea.Quit
+
+	default:
+		return m, nil
+	}
+}
+
+// ReleaseSelectedPort releases the currently selected port
+func (m *Model) ReleaseSelectedPort() (*Model, tea.Cmd) {
+	if m.Cursor < 0 || m.Cursor >= len(m.GetPagedPorts()) {
+		m.Error = fmt.Errorf("no port selected")
+		m.MenuOpen = false
+		return m, nil
+	}
+
+	// Get actual port from paged list
+	actualIndex := m.Page*m.PageSize + m.Cursor
+	if actualIndex >= len(m.Ports) {
+		m.Error = fmt.Errorf("invalid port selection")
+		m.MenuOpen = false
+		return m, nil
+	}
+
+	port := m.Ports[actualIndex]
+
+	// Close menu and return command to execute release
+	m.MenuOpen = false
+	return m, releasePortCmd(port.AppName)
+}
+
+// releasePortCmd creates a command that calls yardmaster CLI to release port
+func releasePortCmd(appName string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("yardmaster", "release", appName)
+		output, err := cmd.CombinedOutput()
+
+		if err != nil {
+			return releaseResultMsg{
+				success: false,
+				appName: appName,
+				error:   fmt.Errorf("release failed: %v - %s", err, string(output)),
+			}
+		}
+
+		return releaseResultMsg{
+			success: true,
+			appName: appName,
+		}
+	}
+}
+
+type releaseResultMsg struct {
+	success bool
+	appName string
+	error   error
 }
 
 // View implements tea.Model - will be provided by ui package

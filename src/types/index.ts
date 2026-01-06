@@ -26,6 +26,7 @@ export interface Config {
   ngrok: {
     auth_token: string;
     region: string;
+    domain?: string;
   };
   registry: {
     path: string;

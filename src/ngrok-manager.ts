@@ -60,12 +60,19 @@ export class NgrokManager {
 
     try {
       // Create tunnel using ngrok SDK
-      const listener = await ngrok.forward({
+      const forwardOptions: any = {
         addr: port,
         authtoken: this.config.ngrok.auth_token,
         // Label the tunnel with app name for easier identification
         metadata: JSON.stringify({ app_name: appName, managed_by: 'yardmaster' })
-      });
+      };
+
+      // Add custom domain if configured
+      if (this.config.ngrok.domain) {
+        forwardOptions.domain = this.config.ngrok.domain;
+      }
+
+      const listener = await ngrok.forward(forwardOptions);
 
       // Get the public URL
       const url = listener.url() || '';

@@ -64,6 +64,10 @@ export async function loadConfig(): Promise<Config> {
     config.ngrok.auth_token = process.env.NGROK_AUTH_TOKEN;
   }
 
+  if (process.env.NGROK_DOMAIN) {
+    config.ngrok.domain = process.env.NGROK_DOMAIN;
+  }
+
   if (process.env.PORT_RANGE_START) {
     config.port_range.start = parseInt(process.env.PORT_RANGE_START, 10);
   }

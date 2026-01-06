@@ -125,10 +125,18 @@ Override defaults by creating `~/.yardmaster/config.json`:
 ### Environment Variables
 
 ```bash
+# Required
 export NGROK_AUTH_TOKEN="your-token"
+
+# Optional - Custom ngrok domain (requires paid ngrok account)
+export NGROK_DOMAIN="locomotive.ngrok.dev"
+
+# Optional - Custom port range
 export PORT_RANGE_START=4000
 export PORT_RANGE_END=5000
 ```
+
+**Note**: Custom ngrok domains (`NGROK_DOMAIN`) require a paid ngrok account with reserved domains or subdomains. Leave unset to use ngrok's free random URLs.
 
 ## Architecture
 
@@ -329,7 +337,6 @@ Future enhancements (not in MVP):
 - **🔐 Multi-Machine Aggregation**: Auth tokens to aggregate registries
 - **📊 Analytics**: Port usage metrics and history
 - **🐳 Docker Integration**: Auto-discover containerized apps
-- **🌍 Custom Domains**: Configurable ngrok domains
 - **🔔 Webhooks**: Notifications on port events
 - **💾 Database**: SQLite/Postgres instead of JSON
 - **🤝 Team Features**: Multi-user/organization support

@@ -60,10 +60,25 @@ func RenderDetailView(m *models.Model) string {
 	details += "  Region:            us\n"
 	details += "\n"
 
-	// Security
+	// Security - display actual config
 	details += headerStyle.Render("  ──────────────── Security ────────────────") + "\n\n"
-	details += "  Authentication:    🔓 None\n"
-	details += "  IP Restrictions:   None\n"
+	if port.Security != nil {
+		if port.Security.BasicAuth {
+			details += "  Authentication:    🔒 Basic Auth Enabled\n"
+		} else {
+			details += "  Authentication:    🔓 None\n"
+		}
+
+		if port.Security.IPRestrictions {
+			details += "  IP Restrictions:   🔒 Enabled\n"
+		} else {
+			details += "  IP Restrictions:   None\n"
+		}
+	} else {
+		// Legacy registrations without security field
+		details += "  Authentication:    🔓 None\n"
+		details += "  IP Restrictions:   None\n"
+	}
 	details += "\n"
 
 	// Metadata

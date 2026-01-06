@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -26,9 +27,10 @@ func NewReader() (*Reader, error) {
 	}, nil
 }
 
-// Read reads and parses the registry file
+// Read reads and parses the registry file with file locking
 func (r *Reader) Read() (*RegistryData, error) {
-	data, err := os.ReadFile(r.registryPath)
+	// Open file for reading
+	file, err := os.Open(r.registryPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Return empty registry if file doesn't exist
@@ -38,6 +40,19 @@ func (r *Reader) Read() (*RegistryData, error) {
 				LastUpdated: time.Now(),
 			}, nil
 		}
+		return nil, fmt.Errorf("failed to open registry: %w", err)
+	}
+	defer file.Close()
+
+	// Acquire shared lock for reading (LOCK_SH)
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH); err != nil {
+		return nil, fmt.Errorf("failed to acquire read lock: %w", err)
+	}
+	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+
+	// Read file content
+	data, err := os.ReadFile(r.registryPath)
+	if err != nil {
 		return nil, fmt.Errorf("failed to read registry: %w", err)
 	}
 

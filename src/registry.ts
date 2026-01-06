@@ -7,6 +7,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname } from 'path';
+import * as lockfile from 'proper-lockfile';
 import type {
   PortRegistration,
   RegistryData,
@@ -112,14 +113,19 @@ export class PortRegistry {
       port = availablePort;
     }
 
-    // Create registration
+    // Create registration with security metadata
     const registration: PortRegistration = {
       app_name: appName,
       port,
       ngrok_url: null, // Will be set by ngrokManager
       pid: process.pid,
       registered_at: new Date().toISOString(),
-      status: 'active'
+      status: 'active',
+      security: {
+        basic_auth: !!this.config.ngrok.basic_auth,
+        ip_restrictions: !!(this.config.ngrok.ip_allow?.length || this.config.ngrok.ip_deny?.length),
+        custom_domain: !!this.config.ngrok.domain
+      }
     };
 
     this.data.ports[port] = registration;
@@ -262,17 +268,36 @@ export class PortRegistry {
    * Load registry from disk (real file I/O)
    */
   private async load(): Promise<void> {
-    const content = await readFile(this.registryPath, 'utf-8');
-    this.data = JSON.parse(content);
+    // Acquire shared lock for reading
+    const release = await lockfile.lock(this.registryPath, {
+      retries: { retries: 5, minTimeout: 100 }
+    });
+
+    try {
+      const content = await readFile(this.registryPath, 'utf-8');
+      this.data = JSON.parse(content);
+    } finally {
+      await release();
+    }
   }
 
   /**
-   * Save registry to disk (real file I/O)
+   * Save registry to disk with atomic write and exclusive lock
    */
   private async save(): Promise<void> {
     await this.ensureDirectory();
-    const content = JSON.stringify(this.data, null, 2);
-    await writeFile(this.registryPath, content, 'utf-8');
+
+    // Acquire exclusive lock for writing
+    const release = await lockfile.lock(this.registryPath, {
+      retries: { retries: 5, minTimeout: 100 }
+    });
+
+    try {
+      const content = JSON.stringify(this.data, null, 2);
+      await writeFile(this.registryPath, content, 'utf-8');
+    } finally {
+      await release();
+    }
   }
 
   /**

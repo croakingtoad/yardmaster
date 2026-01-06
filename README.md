@@ -412,6 +412,37 @@ npm run type-check
 
 # Lint
 npm run lint
+
+# Run tests
+npm test
+
+# Watch tests
+npm run test:watch
+```
+
+### Testing
+
+The project includes comprehensive tests for critical functionality:
+
+**TypeScript Tests** (`src/validation.test.ts`):
+- Basic auth format validation (21 test cases)
+- CIDR notation validation
+- IPv4 and IPv6 support
+- Edge case handling
+
+**Go Tests** (`tui/internal/registry/reader_test.go`):
+- Registry file parsing
+- Empty registry handling
+- Invalid JSON error handling
+- Active port filtering
+
+Run tests:
+```bash
+# TypeScript tests
+npm test
+
+# Go tests
+cd tui && go test ./...
 ```
 
 ## License

@@ -68,29 +68,53 @@ func RenderListView(m *models.Model) string {
 		b.WriteString(msgStyle.Render(fmt.Sprintf("ℹ️  %s", m.Message)) + "\n\n")
 	}
 
-	// Header
-	header := headerStyle.Render(fmt.Sprintf("📊 Active Port Registrations (%d)", len(m.Ports)))
+	// Header with pagination info
+	totalPages := m.GetTotalPages()
+	pageInfo := ""
+	if totalPages > 1 {
+		pageInfo = fmt.Sprintf(" • Page %d/%d", m.Page+1, totalPages)
+	}
+	header := headerStyle.Render(fmt.Sprintf("📊 Active Port Registrations (%d)%s", len(m.Ports), pageInfo))
 	b.WriteString(header + "\n\n")
 
+	// Get paged ports
+	pagedPorts := m.GetPagedPorts()
+
 	// Port list
-	if len(m.Ports) == 0 {
-		b.WriteString(mutedStyle.Render("  No active ports registered"))
+	if len(pagedPorts) == 0 {
+		if len(m.Ports) == 0 {
+			b.WriteString(mutedStyle.Render("  No active ports registered"))
+		} else {
+			b.WriteString(mutedStyle.Render("  No ports on this page"))
+		}
 		b.WriteString("\n")
 	} else {
-		for i, port := range m.Ports {
+		for i, port := range pagedPorts {
 			cursor := " "
 			if i == m.Cursor {
 				cursor = "❯"
 			}
 
-			// Security indicator
+			// Security indicator from actual config
 			securityIcon := "🔓"
 			securityText := "No Auth"
+			if port.Security != nil {
+				if port.Security.BasicAuth && port.Security.IPRestrictions {
+					securityIcon = "🔒"
+					securityText = "Basic Auth + IP"
+				} else if port.Security.BasicAuth {
+					securityIcon = "🔒"
+					securityText = "Basic Auth"
+				} else if port.Security.IPRestrictions {
+					securityIcon = "🔒"
+					securityText = "IP Restricted"
+				}
+			}
 
-			// Domain type
+			// Domain type from actual config
 			domainIcon := "🎲"
 			domainType := "Random Domain"
-			if port.NgrokURL != nil && strings.Contains(*port.NgrokURL, "locomotive.ngrok.dev") {
+			if port.Security != nil && port.Security.CustomDomain {
 				domainIcon = "🌐"
 				domainType = "Custom Domain"
 			}
@@ -126,7 +150,12 @@ func RenderListView(m *models.Model) string {
 	b.WriteString(footer + "\n\n")
 
 	// Keybindings
-	keybindings := mutedStyle.Render("[↑/↓] Navigate • [Enter] Details • [M] Menu • [R] Refresh • [Q] Quit")
+	keyHelp := "[↑/↓] Navigate • [Enter] Details"
+	if m.GetTotalPages() > 1 {
+		keyHelp += " • [←/→] Page"
+	}
+	keyHelp += " • [M] Menu • [R] Refresh • [Q] Quit"
+	keybindings := mutedStyle.Render(keyHelp)
 	b.WriteString(keybindings)
 
 	// Add menu overlay if open

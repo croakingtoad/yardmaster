@@ -10,6 +10,11 @@ export interface PortRegistration {
   pid: number | null;
   registered_at: string;
   status: 'active' | 'released';
+  security?: {
+    basic_auth: boolean;
+    ip_restrictions: boolean;
+    custom_domain: boolean;
+  };
 }
 
 export interface RegistryData {

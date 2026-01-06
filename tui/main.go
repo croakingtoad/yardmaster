@@ -16,10 +16,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Ensure cleanup on exit
+	defer func() {
+		if err := model.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error during cleanup: %v\n", err)
+		}
+	}()
+
+	// Get registry path and set up file watching
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
+		os.Exit(1)
+	}
+	registryPath := home + "/.yardmaster/registry.json"
+
 	// Initial data load
 	if err := model.RefreshData(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading registry: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Start watching the registry file
+	if err := model.WatchRegistry(registryPath); err != nil {
+		// Warn but don't fail - we can still refresh manually
+		fmt.Fprintf(os.Stderr, "Warning: Could not watch registry file: %v\n", err)
 	}
 
 	p := tea.NewProgram(

@@ -4,11 +4,15 @@ A terminal user interface (TUI) for managing yardmaster port registrations, buil
 
 ## Features
 
-- **📊 Real-time Port List**: View all active port registrations with auto-refresh
+- **📊 Real-time Port List**: View all active port registrations with event-driven updates
 - **🔍 Port Details**: Inspect detailed information about each registered port
 - **⌨️ Keyboard Navigation**: Vim-style keyboard shortcuts for efficient navigation
 - **🎨 Beautiful UI**: Styled with lipgloss for a modern terminal experience
-- **🔄 Live Updates**: Registry automatically refreshes every 5 seconds
+- **🔄 Live Updates**: Registry automatically updates using fsnotify (no polling!)
+- **🔒 Security Display**: Shows actual auth and IP restriction status per port
+- **📄 Pagination**: Handle large port lists with 20 items per page
+- **🛡️ Thread Safe**: File locking prevents corruption from concurrent access
+- **✅ Error Handling**: Clear error messages displayed in UI
 
 ## Installation
 
@@ -41,6 +45,7 @@ yardmaster-tui
 
 #### List View
 - `↑/↓` or `k/j` - Navigate up/down
+- `←/→` or `h/l` - Previous/next page (when multiple pages)
 - `Enter` - View port details
 - `M` - Open admin menu
 - `R` - Manually refresh registry
@@ -75,18 +80,28 @@ tui/
 
 ## How It Works
 
-1. **Registry Reader**: Reads `~/.yardmaster/registry.json` file
-2. **Bubbletea Model**: Manages application state using Elm architecture
-   - `Init()` - Initial command (starts auto-refresh timer)
-   - `Update()` - Processes keyboard events and timer ticks
+1. **Registry Reader**: Reads `~/.yardmaster/registry.json` with file locking
+2. **File Watching**: Uses fsnotify for event-driven updates (no polling!)
+3. **Bubbletea Model**: Manages application state using Elm architecture
+   - `Init()` - Starts file watcher
+   - `Update()` - Processes keyboard events and file change events
    - `View()` - Renders UI based on current state
-3. **Auto-refresh**: Polls registry file every 5 seconds for changes
-4. **Styling**: Uses lipgloss for colors, borders, and layout
+4. **Thread Safety**: Shared locks for reads, exclusive locks for writes
+5. **Pagination**: Displays 20 ports per page for large registries
+6. **Security Display**: Reads security metadata from registry
+7. **Styling**: Uses lipgloss for colors, borders, and layout
 
 ## Future Features (Phase 2+)
 
+### Completed
+- ✅ **Port Details View** - Complete with security info
+- ✅ **Pagination** - Handle large port lists (20 per page)
+- ✅ **File Watching** - Event-driven updates with fsnotify
+- ✅ **Security Display** - Shows actual auth/IP/domain settings
+- ✅ **Error Handling** - User-visible error messages
+- ✅ **Thread Safety** - File locking prevents corruption
+
 ### Planned Enhancements
-- ✅ **Port Details View** - Complete
 - ⏳ **Delete/Release Ports** - Call `yardmaster release` command
 - ⏳ **New Port Registration** - Interactive form to register new ports
 - ⏳ **Edit Security Settings** - Update auth/IP restrictions
@@ -94,7 +109,7 @@ tui/
 - ⏳ **Test Connection** - Ping ngrok endpoint
 - ⏳ **View Logs** - Show port activity logs
 - ⏳ **Export Registry** - Export to JSON/CSV
-- ⏳ **Configuration** - TUI settings (refresh rate, theme, etc.)
+- ⏳ **Configuration** - TUI settings (page size, theme, etc.)
 
 ### Advanced Features
 - **Auto-detect Ports**: Discover ports not registered in yardmaster
@@ -145,10 +160,31 @@ go build -o yardmaster-tui
 - Run `go mod tidy` to sync dependencies
 - Ensure Go 1.21+ is installed
 
+## Testing
+
+Run the test suite:
+
+```bash
+go test ./...
+```
+
+Run tests with verbose output:
+
+```bash
+go test -v ./...
+```
+
+Tests cover:
+- Registry file parsing with valid/invalid JSON
+- Empty registry handling
+- Active port filtering
+- File locking behavior
+
 ## Dependencies
 
 - [bubbletea](https://github.com/charmbracelet/bubbletea) - TUI framework
 - [lipgloss](https://github.com/charmbracelet/lipgloss) - Styling library
+- [fsnotify](https://github.com/fsnotify/fsnotify) - File system notifications
 
 ## License
 

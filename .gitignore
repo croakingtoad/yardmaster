@@ -39,3 +39,10 @@ coverage/
 
 # User config (keep default, ignore user overrides)
 config/user.json
+
+# Generated/temporary documentation
+COMPLIANCE.md
+PHASE2.md
+PROJECT_SUMMARY.md
+TEST_RESULTS.md
+SETUP.md

@@ -1,4 +1,4 @@
-# 🚂 Yardmaster
+# Yardmaster
 
 **Port registry with ngrok integration and MCP server for AI agents**
 
@@ -6,45 +6,118 @@ Yardmaster helps AI agents (like Claude) automatically manage port allocations a
 
 ## Features
 
-- **🔢 Port Registry**: Automatic port allocation from configurable range (default: 3000-9000)
-- **🌐 ngrok Integration**: Automatic tunnel creation with public URLs
-- **🤖 MCP Server**: AI agents can register/release ports via Model Context Protocol
-- **💻 CLI**: Manual management via command-line interface
-- **🖥️ TUI**: Beautiful terminal interface built with bubbletea (see [tui/README.md](tui/README.md))
-- **💾 Persistent**: JSON-based storage survives restarts
-- **✅ Zero Mock Policy**: Real ngrok tunnels and file I/O from day one
+- **Port Registry**: Automatic port allocation from configurable range (default: 3000-9000)
+- **ngrok Integration**: Automatic tunnel creation with public URLs
+- **MCP Server**: AI agents can register/release ports via Model Context Protocol
+- **CLI**: Manual management via command-line interface
+- **TUI**: Beautiful terminal interface built with bubbletea (see [tui/README.md](tui/README.md))
+- **Persistent Storage**: JSON-based storage survives restarts
+- **Zero Mock Policy**: Real ngrok tunnels and file I/O from day one
+
+## Prerequisites
+
+- **Node.js 18+** (or Bun runtime)
+- **ngrok account** - Free tier works ([sign up here](https://dashboard.ngrok.com/signup))
+- **Go 1.21+** (optional, for TUI only)
 
 ## Installation
 
+### 1. Clone and Install Dependencies
+
 ```bash
-# Clone and install
-git clone <repository-url>
+git clone https://github.com/croakingtoad/yardmaster.git
 cd yardmaster
 npm install
 npm run build
+```
 
-# Make CLI globally available (optional)
+### 2. Get Your ngrok Auth Token
+
+1. Sign up at [ngrok.com](https://dashboard.ngrok.com/signup) if you haven't already
+2. Go to [your authtoken page](https://dashboard.ngrok.com/get-started/your-authtoken)
+3. Copy your auth token
+
+### 3. Configure Auth Token
+
+**Option A: Environment Variable (Recommended)**
+
+```bash
+export NGROK_AUTH_TOKEN="your_token_here"
+```
+
+Make it permanent by adding to your shell profile:
+
+```bash
+# For bash
+echo 'export NGROK_AUTH_TOKEN="your_token_here"' >> ~/.bashrc
+source ~/.bashrc
+
+# For zsh
+echo 'export NGROK_AUTH_TOKEN="your_token_here"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Option B: User Config File**
+
+Create `~/.yardmaster/config.json`:
+
+```json
+{
+  "ngrok": {
+    "auth_token": "your_token_here"
+  }
+}
+```
+
+**NEVER commit your ngrok auth token to git!** Always use environment variables or user config files (which are outside the repo).
+
+### 4. Verify Setup
+
+```bash
+# Test the CLI
+yardmaster status
+
+# Expected output:
+# Yardmaster Status
+# ──────────────────────────────────────────────────
+# Port Range: 3000 - 9000
+# Registry Path: ~/.yardmaster/registry.json
+# Active Registrations: 0
+# ngrok Region: us
+# ngrok Auth Token: xxxxxxxx...
+# ──────────────────────────────────────────────────
+```
+
+### 5. Make CLI Globally Available (Optional)
+
+```bash
 npm link
+# Now you can use: yardmaster <command>
 ```
 
 ## Quick Start
 
-> **🚨 IMPORTANT**: See [CLAUDE_USAGE_GUIDE.md](CLAUDE_USAGE_GUIDE.md) for how to ensure Claude actually uses Yardmaster!
+> **IMPORTANT**: See [CLAUDE_USAGE_GUIDE.md](CLAUDE_USAGE_GUIDE.md) for how to ensure Claude actually uses Yardmaster!
 
 ### For AI Agents (MCP)
 
-Add to your MCP server config:
+Add to your MCP server config (e.g., `claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "yardmaster": {
       "command": "node",
-      "args": ["/path/to/yardmaster/dist/index.js"]
+      "args": ["/absolute/path/to/yardmaster/dist/index.js"],
+      "env": {
+        "NGROK_AUTH_TOKEN": "your_token_here"
+      }
     }
   }
 }
 ```
+
+**Note**: Use absolute paths, not relative. The `env` section is optional if you've set `NGROK_AUTH_TOKEN` globally.
 
 Then AI agents can use:
 
@@ -99,11 +172,12 @@ go build -o yardmaster-tui
 ```
 
 **TUI Features:**
-- 📊 Real-time port list with auto-refresh
-- 🔍 Detailed port information view
-- ⌨️ Vim-style keyboard navigation
-- 🎨 Styled with lipgloss
-- 🔄 Live registry updates every 5 seconds
+- Real-time port list with event-driven updates
+- Detailed port information view
+- Vim-style keyboard navigation
+- Styled with lipgloss
+- Pagination for large port lists (20 per page)
+- Thread-safe file locking
 
 See [tui/README.md](tui/README.md) for full TUI documentation.
 
@@ -138,9 +212,15 @@ Override defaults by creating `~/.yardmaster/config.json`:
   "port_range": {
     "start": 4000,
     "end": 5000
+  },
+  "ngrok": {
+    "auth_token": "your_token_here",
+    "region": "us"
   }
 }
 ```
+
+**Available ngrok regions**: `us`, `eu`, `ap`, `au`, `sa`, `jp`, `in`
 
 ### Environment Variables
 
@@ -244,21 +324,21 @@ Claude: [Internally]
 ```bash
 # Start working on frontend
 $ yardmaster register frontend
-✅ Port 3000 registered for 'frontend'
-🌐 Creating ngrok tunnel...
+✓ Port 3000 registered for 'frontend'
+Creating ngrok tunnel...
    ngrok URL: https://abc123.ngrok.app
 
 # See what's running
 $ yardmaster list
-📋 Active Port Registrations (2)
+Active Port Registrations (2)
 ────────────────────────────────────────────────────────────────────────────────
-🚂 frontend
+frontend
    Port: 3000
    ngrok: https://abc123.ngrok.app
    Registered: 12/28/2025, 10:30:00 AM
    Status: active
 ────────────────────────────────────────────────────────────────────────────────
-🚂 api
+api
    Port: 8080
    ngrok: https://def456.ngrok.app
    Registered: 12/28/2025, 10:32:00 AM
@@ -267,8 +347,8 @@ $ yardmaster list
 
 # Done with frontend
 $ yardmaster release frontend
-🌐 Closing ngrok tunnel...
-✅ Released port 3000 from 'frontend'
+Closing ngrok tunnel...
+✓ Released port 3000 from 'frontend'
 ```
 
 ## MCP Tools Reference
@@ -353,47 +433,93 @@ Get next available port in range.
 
 Yardmaster follows the **Zero Mock Policy**: all code uses real implementations from day one.
 
-✅ **Real ngrok tunnels** via @ngrok/ngrok SDK
-✅ **Real file I/O** for registry persistence
-✅ **Real MCP protocol** via @modelcontextprotocol/sdk
-❌ **No mocks, stubs, or placeholders**
+- Real ngrok tunnels via @ngrok/ngrok SDK
+- Real file I/O for registry persistence
+- Real MCP protocol via @modelcontextprotocol/sdk
+- No mocks, stubs, or placeholders
 
-See `COMPLIANCE.md` for audit results.
+## Roadmap
 
-## Phase 2 Roadmap
+### Future Enhancements
 
-Future enhancements:
+- **Web Dashboard**: Browser-based UI for managing ports across machines
+- **Multi-Machine Aggregation**: Auth tokens to aggregate registries
+- **Analytics**: Port usage metrics and history
+- **Docker Integration**: Auto-discover containerized apps
+- **Webhooks**: Notifications on port events
+- **Database Backend**: SQLite/Postgres instead of JSON
+- **Team Features**: Multi-user/organization support
 
-- **🌐 Web Dashboard**: Browser-based UI for managing ports across machines
-- **🔐 Multi-Machine Aggregation**: Auth tokens to aggregate registries
-- **📊 Analytics**: Port usage metrics and history
-- **🐳 Docker Integration**: Auto-discover containerized apps
-- **🔔 Webhooks**: Notifications on port events
-- **💾 Database**: SQLite/Postgres instead of JSON
-- **🤝 Team Features**: Multi-user/organization support
+### Recently Completed
 
-**Recently Completed:**
-- ✅ Custom ngrok domains and subdomains
-- ✅ Authentication (Basic Auth, IP restrictions)
-- ✅ Terminal UI (TUI) with bubbletea
+- Custom ngrok domains and subdomains
+- Authentication (Basic Auth, IP restrictions)
+- Terminal UI (TUI) with bubbletea
+- File locking for thread safety
+- Event-driven file watching (fsnotify)
+- Comprehensive input validation
+- Test suite (21 TypeScript + 4 Go tests)
 
 ## Troubleshooting
 
 ### "Failed to initialize ngrok"
 
-- Check your ngrok auth token in config
-- Verify token is valid at https://dashboard.ngrok.com/get-started/your-authtoken
+**Cause**: Auth token not set or invalid
+
+**Fix**:
+1. Verify token is set: `echo $NGROK_AUTH_TOKEN`
+2. Check token is valid at [ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken)
+3. Try setting in user config file (`~/.yardmaster/config.json`) instead
+4. Ensure no typos in token (they're long!)
 
 ### "No available ports in range"
 
-- All ports in configured range are occupied
-- Increase range in config or release unused ports
+**Cause**: All ports in configured range (default: 3000-9000) are occupied
+
+**Fix**:
+1. List current registrations: `yardmaster list`
+2. Release unused ports: `yardmaster release <app_name>`
+3. Expand port range in config or environment variables
+4. Check for other processes: `lsof -i :3000-9000`
 
 ### "Port already in use"
 
-- Another app registered that port
-- Use `yardmaster list` to see active registrations
-- Choose a different port or release the existing one
+**Cause**: Another app has registered that specific port
+
+**Fix**:
+1. Check active registrations: `yardmaster list`
+2. Release the existing registration: `yardmaster release <app_name>`
+3. Choose a different port or use auto-assignment (omit port number)
+
+### MCP Server Not Responding
+
+**Cause**: Incorrect path, missing auth token, or server crash
+
+**Fix**:
+1. Verify **absolute** path in MCP config (not relative)
+2. Check `NGROK_AUTH_TOKEN` is in `env` section or globally set
+3. Test manually: `node /path/to/yardmaster/dist/index.js`
+4. Check MCP logs for errors (location varies by client)
+5. Restart your AI client (Claude Desktop, etc.)
+
+### Invalid NGROK_BASIC_AUTH Error
+
+**Cause**: Basic auth format is incorrect
+
+**Fix**:
+- Format must be `username:password` (colon-separated)
+- Example: `NGROK_BASIC_AUTH="admin:secure123"`
+- Cannot be empty or missing password
+
+### Invalid NGROK_IP_ALLOW/DENY Error
+
+**Cause**: Invalid CIDR notation
+
+**Fix**:
+- Use format: `IP/prefix` (e.g., `192.168.1.0/24`)
+- For single IP: `1.2.3.4/32`
+- For multiple: `1.2.3.4/32,10.0.0.0/8` (comma-separated)
+- IPv6 supported: `2001:db8::/32`
 
 ## Development
 
@@ -455,4 +581,4 @@ Issues and PRs welcome! This is an MVP - there's plenty of room for improvement.
 
 ---
 
-Built with ❤️ by LOCOMOTIVE
+Built by LOCOMOTIVE

@@ -304,6 +304,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "m":
 			if m.CurrentView == ViewList {
 				m.MenuOpen = !m.MenuOpen
+				if m.MenuOpen {
+					// Reset menu cursor to first item when opening
+					m.MenuCursor = 0
+				}
 			}
 		}
 

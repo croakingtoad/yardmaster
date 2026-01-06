@@ -27,6 +27,9 @@ export interface Config {
     auth_token: string;
     region: string;
     domain?: string;
+    basic_auth?: string;
+    ip_allow?: string[];
+    ip_deny?: string[];
   };
   registry: {
     path: string;

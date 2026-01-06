@@ -68,6 +68,18 @@ export async function loadConfig(): Promise<Config> {
     config.ngrok.domain = process.env.NGROK_DOMAIN;
   }
 
+  if (process.env.NGROK_BASIC_AUTH) {
+    config.ngrok.basic_auth = process.env.NGROK_BASIC_AUTH;
+  }
+
+  if (process.env.NGROK_IP_ALLOW) {
+    config.ngrok.ip_allow = process.env.NGROK_IP_ALLOW.split(',').map(ip => ip.trim());
+  }
+
+  if (process.env.NGROK_IP_DENY) {
+    config.ngrok.ip_deny = process.env.NGROK_IP_DENY.split(',').map(ip => ip.trim());
+  }
+
   if (process.env.PORT_RANGE_START) {
     config.port_range.start = parseInt(process.env.PORT_RANGE_START, 10);
   }

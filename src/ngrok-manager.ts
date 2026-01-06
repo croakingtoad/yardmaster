@@ -72,6 +72,20 @@ export class NgrokManager {
         forwardOptions.domain = this.config.ngrok.domain;
       }
 
+      // Add basic authentication if configured
+      if (this.config.ngrok.basic_auth) {
+        forwardOptions.basic_auth = this.config.ngrok.basic_auth;
+      }
+
+      // Add IP restrictions if configured
+      if (this.config.ngrok.ip_allow && this.config.ngrok.ip_allow.length > 0) {
+        forwardOptions.ip_restriction_allow_cidrs = this.config.ngrok.ip_allow;
+      }
+
+      if (this.config.ngrok.ip_deny && this.config.ngrok.ip_deny.length > 0) {
+        forwardOptions.ip_restriction_deny_cidrs = this.config.ngrok.ip_deny;
+      }
+
       const listener = await ngrok.forward(forwardOptions);
 
       // Get the public URL

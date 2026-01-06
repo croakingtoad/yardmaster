@@ -60,6 +60,14 @@ func (a *appModel) View() string {
 // Update delegates to the embedded Model
 func (a *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updatedModel, cmd := a.Model.Update(msg)
-	a.Model = updatedModel.(*models.Model)
+
+	// Type assertion with safety check
+	if m, ok := updatedModel.(*models.Model); ok {
+		a.Model = m
+	} else {
+		// This should never happen, but guard against panic
+		fmt.Fprintf(os.Stderr, "Error: unexpected model type in Update\n")
+	}
+
 	return a, cmd
 }

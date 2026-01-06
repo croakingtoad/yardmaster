@@ -10,11 +10,10 @@ import (
 
 // RenderDetailView renders the port detail screen
 func RenderDetailView(m *models.Model) string {
-	if m.Selected < 0 || m.Selected >= len(m.Ports) {
-		return "No port selected"
+	port := m.GetSelectedPort()
+	if port == nil {
+		return borderStyle.Render("No port selected or port no longer exists\n\nPress [Esc] to return to list view")
 	}
-
-	port := m.Ports[m.Selected]
 	var b strings.Builder
 
 	// Title

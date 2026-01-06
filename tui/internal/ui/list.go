@@ -39,6 +39,15 @@ var (
 			Padding(1, 2)
 )
 
+var (
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF0000")).
+			Bold(true)
+
+	warningStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFAA00"))
+)
+
 // RenderListView renders the main port list view
 func RenderListView(m *models.Model) string {
 	var b strings.Builder
@@ -46,6 +55,18 @@ func RenderListView(m *models.Model) string {
 	// Title
 	title := titleStyle.Render("🚂 Yardmaster TUI")
 	b.WriteString(title + "\n\n")
+
+	// Show error if any
+	if m.Error != nil {
+		errorMsg := errorStyle.Render(fmt.Sprintf("⚠️  Error: %s", m.Error.Error()))
+		b.WriteString(errorMsg + "\n\n")
+	}
+
+	// Show message if any
+	if m.Message != "" {
+		msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFAA"))
+		b.WriteString(msgStyle.Render(fmt.Sprintf("ℹ️  %s", m.Message)) + "\n\n")
+	}
 
 	// Header
 	header := headerStyle.Render(fmt.Sprintf("📊 Active Port Registrations (%d)", len(m.Ports)))

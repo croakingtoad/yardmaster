@@ -9,6 +9,7 @@ import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import type { Config } from './types/index.js';
+import { validateBasicAuth, validateCIDRList } from './validation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -59,7 +60,7 @@ export async function loadConfig(): Promise<Config> {
     }
   };
 
-  // Environment variable overrides
+  // Environment variable overrides with validation
   if (process.env.NGROK_AUTH_TOKEN) {
     config.ngrok.auth_token = process.env.NGROK_AUTH_TOKEN;
   }
@@ -69,15 +70,33 @@ export async function loadConfig(): Promise<Config> {
   }
 
   if (process.env.NGROK_BASIC_AUTH) {
+    const validation = validateBasicAuth(process.env.NGROK_BASIC_AUTH);
+    if (!validation.valid) {
+      throw new Error(`Invalid NGROK_BASIC_AUTH: ${validation.error}`);
+    }
     config.ngrok.basic_auth = process.env.NGROK_BASIC_AUTH;
   }
 
   if (process.env.NGROK_IP_ALLOW) {
-    config.ngrok.ip_allow = process.env.NGROK_IP_ALLOW.split(',').map(ip => ip.trim());
+    const validation = validateCIDRList(process.env.NGROK_IP_ALLOW);
+    if (!validation.valid) {
+      throw new Error(`Invalid NGROK_IP_ALLOW: ${validation.errors.join(', ')}`);
+    }
+    if (validation.errors.length > 0) {
+      console.warn(`Warning: Some CIDRs in NGROK_IP_ALLOW were invalid and skipped: ${validation.errors.join(', ')}`);
+    }
+    config.ngrok.ip_allow = validation.cidrs;
   }
 
   if (process.env.NGROK_IP_DENY) {
-    config.ngrok.ip_deny = process.env.NGROK_IP_DENY.split(',').map(ip => ip.trim());
+    const validation = validateCIDRList(process.env.NGROK_IP_DENY);
+    if (!validation.valid) {
+      throw new Error(`Invalid NGROK_IP_DENY: ${validation.errors.join(', ')}`);
+    }
+    if (validation.errors.length > 0) {
+      console.warn(`Warning: Some CIDRs in NGROK_IP_DENY were invalid and skipped: ${validation.errors.join(', ')}`);
+    }
+    config.ngrok.ip_deny = validation.cidrs;
   }
 
   if (process.env.PORT_RANGE_START) {

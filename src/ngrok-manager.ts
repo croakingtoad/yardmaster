@@ -6,11 +6,21 @@
 import ngrok from '@ngrok/ngrok';
 import type { Config, TunnelInfo } from './types/index.js';
 
+interface NgrokForwardOptions {
+  addr: number;
+  authtoken: string;
+  metadata?: string;
+  domain?: string;
+  basic_auth?: string | string[];
+  ip_restriction_allow_cidrs?: string | string[];
+  ip_restriction_deny_cidrs?: string | string[];
+}
+
 interface ActiveTunnel {
   app_name: string;
   port: number;
   url: string;
-  listener: any; // ngrok listener object
+  listener: any; // ngrok listener object - SDK doesn't export this type
 }
 
 export class NgrokManager {
@@ -59,8 +69,8 @@ export class NgrokManager {
     }
 
     try {
-      // Create tunnel using ngrok SDK
-      const forwardOptions: any = {
+      // Create tunnel using ngrok SDK with properly typed options
+      const forwardOptions: NgrokForwardOptions = {
         addr: port,
         authtoken: this.config.ngrok.auth_token,
         // Label the tunnel with app name for easier identification

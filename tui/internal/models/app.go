@@ -79,7 +79,43 @@ func (m *Model) RefreshData() error {
 		}
 	}
 
+	// Clamp cursor and selected to valid bounds after refresh
+	m.ClampCursor()
+	m.ClampSelected()
+
 	return nil
+}
+
+// ClampCursor ensures cursor is within valid range
+func (m *Model) ClampCursor() {
+	if m.Cursor < 0 {
+		m.Cursor = 0
+	}
+	if len(m.Ports) == 0 {
+		m.Cursor = 0
+	} else if m.Cursor >= len(m.Ports) {
+		m.Cursor = len(m.Ports) - 1
+	}
+}
+
+// ClampSelected ensures selected index is valid or resets to invalid
+func (m *Model) ClampSelected() {
+	if m.Selected < 0 {
+		return // Already invalid
+	}
+	if len(m.Ports) == 0 || m.Selected >= len(m.Ports) {
+		// Selection no longer valid, return to list view
+		m.Selected = -1
+		m.CurrentView = ViewList
+	}
+}
+
+// GetSelectedPort safely returns the selected port if valid
+func (m *Model) GetSelectedPort() *registry.PortRegistration {
+	if m.Selected < 0 || m.Selected >= len(m.Ports) {
+		return nil
+	}
+	return &m.Ports[m.Selected]
 }
 
 func tickCmd() tea.Cmd {
@@ -157,7 +193,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Height = msg.Height
 
 	case tickMsg:
-		m.RefreshData()
+		// Handle refresh errors but don't crash - error is stored in m.Error
+		if err := m.RefreshData(); err != nil {
+			// Error already set in RefreshData, just continue
+		}
 		return m, tickCmd()
 	}
 

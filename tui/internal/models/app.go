@@ -293,6 +293,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case "e":
+			// Edit key in detail view
+			if m.CurrentView == ViewDetail {
+				m.Message = "Edit Security - Coming in Phase 2"
+				return m, nil
+			}
+
+		case "d":
+			// Delete key in detail view
+			if m.CurrentView == ViewDetail {
+				port := m.GetSelectedPort()
+				if port != nil {
+					m.CurrentView = ViewList
+					return m.ReleaseSelectedPort()
+				}
+			}
+
+		case "c":
+			// Copy URL in detail view
+			if m.CurrentView == ViewDetail {
+				port := m.GetSelectedPort()
+				if port != nil && port.NgrokURL != nil {
+					m.Message = "Copy to clipboard - Coming in Phase 2 (URL: " + *port.NgrokURL + ")"
+				} else {
+					m.Message = "No ngrok URL to copy"
+				}
+				return m, nil
+			}
+
 		case "esc":
 			if m.MenuOpen {
 				m.MenuOpen = false

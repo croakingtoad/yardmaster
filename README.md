@@ -13,6 +13,7 @@ Automatic port allocation and ngrok tunnel management for AI agents via MCP prot
   - [CLI Commands](#cli-commands)
   - [MCP Server](#mcp-server)
   - [Terminal UI (TUI)](#terminal-ui-tui)
+- [Training AI Agents](#training-ai-agents)
 - [Architecture](#architecture)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
@@ -220,6 +221,83 @@ go build -ldflags="-s -w" -o yardmaster-tui
 - `q` - Quit
 
 See [tui/README.md](tui/README.md) for complete documentation.
+
+## Training AI Agents
+
+To ensure AI agents use Yardmaster instead of hardcoded ports, add instructions to your project or global configuration.
+
+### Project-Level Configuration
+
+Create or update `/path/to/your/project/CLAUDE.md`:
+
+```markdown
+## Port Management
+
+Before starting any development server:
+
+1. Register port: `mcp.callTool('yardmaster', 'register_port', {app_name: 'your-app'})`
+2. Use returned port number in server configuration
+3. Share returned ngrok URL with user
+4. Release when done: `mcp.callTool('yardmaster', 'release_port', {app_name: 'your-app'})`
+
+Never hardcode ports (3000, 8080, 5173, etc.). Always use Yardmaster.
+```
+
+### Global Configuration
+
+Add to `~/.claude/CLAUDE.md` for all projects:
+
+```markdown
+## Port Management Protocol
+
+Before starting servers, APIs, or services:
+1. Check existing: `mcp.callTool('yardmaster', 'query_ports')`
+2. Register port: `mcp.callTool('yardmaster', 'register_port', {app_name: 'name'})`
+3. Use assigned port
+4. Release when done: `mcp.callTool('yardmaster', 'release_port', {app_name: 'name'})`
+```
+
+### Example Workflow
+
+Starting a React development server:
+
+```javascript
+// 1. Register port
+const result = await mcp.callTool('yardmaster', 'register_port', {
+  app_name: 'frontend'
+});
+// Returns: { port: 3000, ngrok_url: "https://abc123.ngrok.app" }
+
+// 2. Configure Vite with assigned port
+// vite.config.ts:
+export default defineConfig({
+  server: { port: 3000 }  // Use result.port
+})
+
+// 3. Start server and share ngrok URL
+npm run dev
+// Tell user: "App running at https://abc123.ngrok.app"
+```
+
+### Handling Port Conflicts
+
+If desired port is unavailable:
+
+```javascript
+// Attempt specific port
+const result = await mcp.callTool('yardmaster', 'register_port', {
+  app_name: 'frontend',
+  desired_port: 3000
+});
+
+if (!result.success) {
+  // Auto-assign instead
+  const fallback = await mcp.callTool('yardmaster', 'register_port', {
+    app_name: 'frontend'
+  });
+  // Use fallback.port
+}
+```
 
 ## Architecture
 

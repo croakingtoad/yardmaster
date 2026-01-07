@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/croakingtoad/yardmaster/tui/internal/config"
+	"github.com/croakingtoad/yardmaster/tui/internal/export"
 	"github.com/croakingtoad/yardmaster/tui/internal/registry"
 	"github.com/fsnotify/fsnotify"
 )
@@ -19,10 +21,14 @@ const (
 	ViewNewPort
 	ViewMenu
 	ViewAbout
+	ViewExport   // Export Registry feature
+	ViewSettings // Configuration feature
+	ViewLogs     // View Logs feature
 )
 
 type tickMsg time.Time
 type fileChangeMsg struct{}
+type logFileChangeMsg struct{}
 
 // Model represents the application state for bubbletea
 type Model struct {
@@ -41,6 +47,30 @@ type Model struct {
 	MenuCursor  int
 	Page        int
 	PageSize    int
+
+	// Form State (Register New Port)
+	Form *FormState
+
+	// Export State
+	ExportFormatIndex    int
+	ExportFilename       string
+	ExportFilenameEdit   bool
+	ExportFilenameCursor int
+
+	// Configuration State
+	Config         *config.TUIConfig
+	SettingsCursor int
+	OriginalConfig *config.TUIConfig // Backup for cancel
+
+	// Log State
+	LogEntries     []interface{} // Will be []logs.LogEntry but avoid import cycle
+	LogScroll      int
+	LogCursor      int
+	LogFilter      string
+	LogFilterMode  bool
+	LogFilterInput string
+	LogReader      interface{} // Will be *logs.Reader but avoid import cycle
+	LogWatcher     *fsnotify.Watcher
 
 	// Reader
 	Reader  *registry.Reader
@@ -65,6 +95,12 @@ func NewModel() (*Model, error) {
 		return nil, err
 	}
 
+	// Load configuration
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+
 	return &Model{
 		Reader:      reader,
 		Watcher:     watcher,
@@ -72,17 +108,24 @@ func NewModel() (*Model, error) {
 		Cursor:      0,
 		Selected:    -1,
 		Page:        0,
-		PageSize:    20, // Show 20 ports per page
+		PageSize:    cfg.PageSize, // Load from config
+		Config:      cfg,
 		LastUpdated: time.Now(),
 	}, nil
 }
 
 // Close cleans up resources
 func (m *Model) Close() error {
+	var err error
 	if m.Watcher != nil {
-		return m.Watcher.Close()
+		err = m.Watcher.Close()
 	}
-	return nil
+	if m.LogWatcher != nil {
+		if logErr := m.LogWatcher.Close(); logErr != nil && err == nil {
+			err = logErr
+		}
+	}
+	return err
 }
 
 // WatchRegistry sets up file watching for the registry
@@ -213,8 +256,40 @@ func (m *Model) Init() tea.Cmd {
 
 // Update implements tea.Model
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle form input when in NewPort view
+	if m.CurrentView == ViewNewPort && m.Form != nil {
+		return m.handleFormInput(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Handle log filter input mode
+		if m.LogFilterMode {
+			switch msg.String() {
+			case "enter":
+				m.LogFilter = m.LogFilterInput
+				m.LogFilterMode = false
+				m.LogScroll = 0
+				m.LogCursor = 0
+				return m, nil
+			case "esc":
+				m.LogFilterMode = false
+				m.LogFilterInput = ""
+				return m, nil
+			case "backspace":
+				if len(m.LogFilterInput) > 0 {
+					m.LogFilterInput = m.LogFilterInput[:len(m.LogFilterInput)-1]
+				}
+				return m, nil
+			default:
+				// Add typed character to filter
+				if len(msg.String()) == 1 {
+					m.LogFilterInput += msg.String()
+				}
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.CurrentView == ViewList && !m.MenuOpen {
@@ -237,9 +312,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Message = "Registry refreshed"
 				return m, nil
 			}
+			if m.CurrentView == ViewLogs {
+				return m, refreshLogsCmd(m)
+			}
 
 		case "up", "k":
-			if m.MenuOpen {
+			if m.CurrentView == ViewLogs {
+				if m.LogScroll > 0 {
+					m.LogScroll--
+					m.LogCursor--
+				}
+			} else if m.CurrentView == ViewSettings {
+				// Navigate settings
+				if m.SettingsCursor > 0 {
+					m.SettingsCursor--
+				}
+			} else if m.CurrentView == ViewExport && !m.ExportFilenameEdit {
+				// Navigate export format selection
+				if m.ExportFormatIndex > 0 {
+					m.ExportFormatIndex--
+					m.UpdateExportFilenameExtension()
+				}
+			} else if m.MenuOpen {
 				// Navigate menu
 				if m.MenuCursor > 0 {
 					m.MenuCursor--
@@ -253,7 +347,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "down", "j":
-			if m.MenuOpen {
+			if m.CurrentView == ViewLogs {
+				if m.LogEntries != nil && m.LogScroll < len(m.LogEntries)-1 {
+					m.LogScroll++
+					m.LogCursor++
+				}
+			} else if m.CurrentView == ViewSettings {
+				// Navigate settings (0-4: PageSize, Theme, Timestamps, Refresh, Save)
+				if m.SettingsCursor < 4 {
+					m.SettingsCursor++
+				}
+			} else if m.CurrentView == ViewExport && !m.ExportFilenameEdit {
+				// Navigate export format selection
+				if m.ExportFormatIndex < 1 { // 0=JSON, 1=CSV
+					m.ExportFormatIndex++
+					m.UpdateExportFilenameExtension()
+				}
+			} else if m.MenuOpen {
 				// Navigate menu (10 items total, 0-9)
 				if m.MenuCursor < 9 {
 					m.MenuCursor++
@@ -270,12 +380,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "left", "h":
-			if m.CurrentView == ViewList && !m.MenuOpen {
+			if m.CurrentView == ViewSettings {
+				// Adjust setting value down/left
+				return m.AdjustSetting(-1)
+			} else if m.CurrentView == ViewList && !m.MenuOpen {
 				m.PrevPage()
 			}
 
 		case "right", "l":
-			if m.CurrentView == ViewList && !m.MenuOpen {
+			if m.CurrentView == ViewSettings {
+				// Adjust setting value up/right
+				return m.AdjustSetting(1)
+			} else if m.CurrentView == ViewList && !m.MenuOpen {
 				m.NextPage()
 			}
 
@@ -283,6 +399,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.MenuOpen {
 				// Handle menu selection
 				return m.HandleMenuSelection()
+			} else if m.CurrentView == ViewSettings {
+				// Save settings
+				if m.SettingsCursor == 4 {
+					// Save button pressed
+					return m.SaveSettings()
+				}
+			} else if m.CurrentView == ViewExport && m.ExportFilenameEdit {
+				// Stop editing filename on enter
+				m.ExportFilenameEdit = false
+			} else if m.CurrentView == ViewExport && !m.ExportFilenameEdit {
+				// Perform export
+				return m.PerformExport()
 			} else if m.CurrentView == ViewList {
 				pagedPorts := m.GetPagedPorts()
 				if m.Cursor < len(pagedPorts) {
@@ -322,12 +450,70 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+		case "f":
+			if m.CurrentView == ViewExport {
+				m.ExportFilenameEdit = !m.ExportFilenameEdit
+				if m.ExportFilenameEdit {
+					m.ExportFilenameCursor = len(m.ExportFilename)
+				}
+			}
+
+		case "/":
+			if m.CurrentView == ViewLogs {
+				m.LogFilterMode = true
+				m.LogFilterInput = m.LogFilter
+				return m, nil
+			}
+
+		case "x":
+			if m.CurrentView == ViewLogs && !m.LogFilterMode {
+				m.LogFilter = ""
+				m.LogFilterInput = ""
+				m.LogScroll = 0
+				m.LogCursor = 0
+				return m, nil
+			}
+
+		case "backspace":
+			if m.CurrentView == ViewExport && m.ExportFilenameEdit {
+				if m.ExportFilenameCursor > 0 {
+					// Remove character before cursor
+					m.ExportFilename = m.ExportFilename[:m.ExportFilenameCursor-1] + m.ExportFilename[m.ExportFilenameCursor:]
+					m.ExportFilenameCursor--
+				}
+			}
+
+		case "delete":
+			if m.CurrentView == ViewExport && m.ExportFilenameEdit {
+				if m.ExportFilenameCursor < len(m.ExportFilename) {
+					// Remove character at cursor
+					m.ExportFilename = m.ExportFilename[:m.ExportFilenameCursor] + m.ExportFilename[m.ExportFilenameCursor+1:]
+				}
+			}
+
 		case "esc":
-			if m.MenuOpen {
+			if m.CurrentView == ViewSettings {
+				// Cancel settings - restore original config
+				if m.OriginalConfig != nil {
+					m.Config = m.OriginalConfig
+					m.PageSize = m.Config.PageSize
+					m.OriginalConfig = nil
+				}
+				m.CurrentView = ViewList
+				m.Message = "Settings canceled"
+				return m, nil
+			}
+			if m.CurrentView == ViewExport && m.ExportFilenameEdit {
+				// Stop editing filename
+				m.ExportFilenameEdit = false
+			} else if m.MenuOpen {
 				m.MenuOpen = false
 			} else if m.CurrentView != ViewList {
+				// Return to list view
 				m.CurrentView = ViewList
 				m.Selected = -1
+				m.Error = nil
+				m.Message = ""
 			}
 
 		case "m":
@@ -336,6 +522,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.MenuOpen {
 					// Reset menu cursor to first item when opening
 					m.MenuCursor = 0
+				}
+			}
+
+		default:
+			// Handle text input for filename editing
+			if m.CurrentView == ViewExport && m.ExportFilenameEdit {
+				// Only allow printable characters
+				if len(msg.String()) == 1 {
+					char := msg.String()
+					// Insert character at cursor position
+					m.ExportFilename = m.ExportFilename[:m.ExportFilenameCursor] + char + m.ExportFilename[m.ExportFilenameCursor:]
+					m.ExportFilenameCursor++
 				}
 			}
 		}
@@ -363,6 +561,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Message = ""
 		}
 		return m, nil
+
+	case registerResultMsg:
+		// Handle registration result
+		if msg.success {
+			m.Message = fmt.Sprintf("Successfully registered '%s' on port %s", msg.appName, msg.port)
+			m.Error = nil
+			m.Form = nil
+			m.CurrentView = ViewList
+			// Refresh data to show new registration
+			m.RefreshData()
+		} else {
+			m.Error = msg.error
+			m.Message = ""
+		}
+		return m, nil
+
+	case loadLogsMsg:
+		return m, nil
 	}
 
 	return m, nil
@@ -376,6 +592,9 @@ func (m *Model) HandleMenuSelection() (*Model, tea.Cmd) {
 		m.MenuOpen = false
 		m.CurrentView = ViewNewPort
 		m.Message = ""
+		// Initialize form state
+		formState := NewFormState()
+		m.Form = &formState
 		return m, nil
 
 	case 1: // Release Selected
@@ -387,18 +606,37 @@ func (m *Model) HandleMenuSelection() (*Model, tea.Cmd) {
 		return m, nil
 
 	case 3: // View Logs
-		m.Message = "View Logs - Coming in Phase 2"
 		m.MenuOpen = false
-		return m, nil
+		m.CurrentView = ViewLogs
+		m.LogScroll = 0
+		m.LogCursor = 0
+		return m, initLogsCmd(m)
 
 	case 5: // Configuration
-		m.Message = "Configuration - Coming in Phase 2"
 		m.MenuOpen = false
+		m.CurrentView = ViewSettings
+		m.SettingsCursor = 0
+		// Backup current config for cancel
+		m.OriginalConfig = &config.TUIConfig{
+			PageSize:        m.Config.PageSize,
+			Theme:           m.Config.Theme,
+			ShowTimestamps:  m.Config.ShowTimestamps,
+			RefreshFallback: m.Config.RefreshFallback,
+		}
+		m.Message = ""
 		return m, nil
 
 	case 6: // Export Registry
-		m.Message = "Export Registry - Coming in Phase 2"
 		m.MenuOpen = false
+		m.CurrentView = ViewExport
+		m.Message = ""
+		// Initialize export state with default filename
+		if defaultFile, err := export.GetDefaultFilename(export.FormatJSON); err == nil {
+			m.ExportFilename = defaultFile
+		}
+		m.ExportFormatIndex = 0 // Default to JSON
+		m.ExportFilenameEdit = false
+		m.ExportFilenameCursor = len(m.ExportFilename)
 		return m, nil
 
 	case 8: // About
@@ -462,6 +700,271 @@ type releaseResultMsg struct {
 	success bool
 	appName string
 	error   error
+}
+
+type registerResultMsg struct {
+	success bool
+	appName string
+	port    string
+	error   error
+}
+
+type loadLogsMsg struct{}
+
+type logsLoadedMsg struct {
+	entries []interface{}
+	error   error
+}
+
+// handleFormInput processes input for the new port registration form
+func (m *Model) handleFormInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			// Cancel form and return to list
+			m.CurrentView = ViewList
+			m.Form = nil
+			m.Message = ""
+			m.Error = nil
+			return m, nil
+
+		case "tab":
+			// Move to next field
+			if m.Form != nil {
+				m.Form.NextField()
+			}
+			return m, nil
+
+		case "shift+tab":
+			// Move to previous field
+			if m.Form != nil {
+				m.Form.PrevField()
+			}
+			return m, nil
+
+		case "enter":
+			// Handle button actions or form submission
+			if m.Form != nil {
+				switch m.Form.CurrentField {
+				case FormFieldSubmit:
+					// Validate and submit form
+					if err := m.Form.Validate(); err != nil {
+						m.Form.ValidationError = err.Error()
+						return m, nil
+					}
+					// Execute register command
+					appName := m.Form.GetAppName()
+					port := m.Form.GetPort()
+					return m, registerPortCmd(appName, port)
+
+				case FormFieldCancel:
+					// Cancel and return to list
+					m.CurrentView = ViewList
+					m.Form = nil
+					m.Message = ""
+					m.Error = nil
+					return m, nil
+				}
+			}
+			return m, nil
+		}
+
+		// Update the active text input
+		if m.Form != nil {
+			switch m.Form.CurrentField {
+			case FormFieldAppName:
+				m.Form.AppNameInput, cmd = m.Form.AppNameInput.Update(msg)
+				// Clear validation error on input
+				m.Form.ValidationError = ""
+				return m, cmd
+
+			case FormFieldPort:
+				m.Form.PortInput, cmd = m.Form.PortInput.Update(msg)
+				// Clear validation error on input
+				m.Form.ValidationError = ""
+				return m, cmd
+			}
+		}
+
+	case registerResultMsg:
+		// Handle registration result
+		if msg.success {
+			m.Message = fmt.Sprintf("Successfully registered '%s' on port %s", msg.appName, msg.port)
+			m.Error = nil
+			m.Form = nil
+			m.CurrentView = ViewList
+			// Refresh data to show new registration
+			m.RefreshData()
+		} else {
+			m.Error = msg.error
+			m.Message = ""
+		}
+		return m, nil
+	}
+
+	return m, cmd
+}
+
+// registerPortCmd creates a command that calls yardmaster CLI to register port
+func registerPortCmd(appName, port string) tea.Cmd {
+	return func() tea.Msg {
+		var cmd *exec.Cmd
+		if port == "" {
+			// Auto-assign port
+			cmd = exec.Command("yardmaster", "register", appName)
+		} else {
+			// Use specified port
+			cmd = exec.Command("yardmaster", "register", appName, port)
+		}
+
+		output, err := cmd.CombinedOutput()
+
+		if err != nil {
+			return registerResultMsg{
+				success: false,
+				appName: appName,
+				port:    port,
+				error:   fmt.Errorf("registration failed: %v - %s", err, string(output)),
+			}
+		}
+
+		return registerResultMsg{
+			success: true,
+			appName: appName,
+			port:    port,
+		}
+	}
+}
+
+// UpdateExportFilenameExtension updates the file extension based on selected format
+func (m *Model) UpdateExportFilenameExtension() {
+	// Determine new extension based on format index
+	var newExt string
+	if m.ExportFormatIndex == 0 {
+		newExt = ".json"
+	} else {
+		newExt = ".csv"
+	}
+
+	// Replace extension in filename
+	filename := m.ExportFilename
+	// Find last dot
+	lastDot := -1
+	for i := len(filename) - 1; i >= 0; i-- {
+		if filename[i] == '.' {
+			lastDot = i
+			break
+		}
+	}
+
+	if lastDot != -1 {
+		m.ExportFilename = filename[:lastDot] + newExt
+	} else {
+		m.ExportFilename = filename + newExt
+	}
+
+	// Reset cursor to end of filename
+	m.ExportFilenameCursor = len(m.ExportFilename)
+}
+
+// PerformExport executes the export operation
+func (m *Model) PerformExport() (*Model, tea.Cmd) {
+	if m.Registry == nil {
+		m.Error = fmt.Errorf("no registry data to export")
+		return m, nil
+	}
+
+	// Get export format
+	var format export.ExportFormat
+	if m.ExportFormatIndex == 0 {
+		format = export.FormatJSON
+	} else {
+		format = export.FormatCSV
+	}
+
+	// Create exporter and export
+	exporter := export.NewExporter(m.Registry)
+	if err := exporter.Export(m.ExportFilename, format); err != nil {
+		m.Error = fmt.Errorf("export failed: %w", err)
+		m.Message = ""
+		return m, nil
+	}
+
+	// Success - return to list view
+	m.Message = fmt.Sprintf("Exported to %s", m.ExportFilename)
+	m.Error = nil
+	m.CurrentView = ViewList
+	return m, nil
+}
+
+// AdjustSetting adjusts the current setting value
+func (m *Model) AdjustSetting(delta int) (*Model, tea.Cmd) {
+	switch m.SettingsCursor {
+	case 0: // Page Size
+		newSize := m.Config.PageSize + delta*5
+		if newSize < 5 {
+			newSize = 5
+		} else if newSize > 100 {
+			newSize = 100
+		}
+		m.Config.PageSize = newSize
+		m.PageSize = newSize // Update model page size too
+
+	case 1: // Theme
+		if m.Config.Theme == "dark" {
+			m.Config.Theme = "light"
+		} else {
+			m.Config.Theme = "dark"
+		}
+
+	case 2: // Show Timestamps
+		m.Config.ShowTimestamps = !m.Config.ShowTimestamps
+
+	case 3: // Refresh Fallback
+		newRefresh := m.Config.RefreshFallback + delta*5
+		if newRefresh < 0 {
+			newRefresh = 0
+		} else if newRefresh > 300 {
+			newRefresh = 300
+		}
+		m.Config.RefreshFallback = newRefresh
+	}
+
+	return m, nil
+}
+
+// SaveSettings saves the current configuration to disk
+func (m *Model) SaveSettings() (*Model, tea.Cmd) {
+	if err := config.SaveConfig(m.Config); err != nil {
+		m.Error = err
+		m.Message = ""
+		return m, nil
+	}
+
+	m.OriginalConfig = nil
+	m.CurrentView = ViewList
+	m.Message = "Settings saved successfully"
+	m.Error = nil
+	return m, nil
+}
+
+// initLogsCmd initializes the log viewer by loading logs and setting up watching
+func initLogsCmd(m *Model) tea.Cmd {
+	return func() tea.Msg {
+		// Import logs package here to avoid import cycle
+		// This will be called at runtime
+		return loadLogsMsg{}
+	}
+}
+
+// refreshLogsCmd reloads the logs
+func refreshLogsCmd(m *Model) tea.Cmd {
+	return func() tea.Msg {
+		return loadLogsMsg{}
+	}
 }
 
 // View implements tea.Model - will be provided by ui package

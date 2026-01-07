@@ -75,6 +75,12 @@ func (a *appModel) View() string {
 		return ui.RenderAboutView(a.Model)
 	case models.ViewMenu:
 		return ui.RenderMenuView(a.Model)
+	case models.ViewExport:
+		return ui.RenderExportView(a.Model)
+	case models.ViewSettings:
+		return ui.RenderSettingsView(a.Model)
+	case models.ViewLogs:
+		return ui.RenderLogsView(a.Model)
 	default:
 		return ui.RenderListView(a.Model)
 	}

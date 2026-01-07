@@ -20,7 +20,7 @@ func RenderExportView(m *models.Model) string {
 	// Format selection
 	formats := []string{"JSON", "CSV"}
 
-	b.WriteString(lipgloss.NewStyle().Bold(true).Render("Select Export Format:"))
+	b.WriteString(labelStyle.Render("Select Export Format:"))
 	b.WriteString("\n\n")
 
 	for i, format := range formats {
@@ -35,7 +35,7 @@ func RenderExportView(m *models.Model) string {
 	b.WriteString("\n")
 
 	// Filename input
-	b.WriteString(lipgloss.NewStyle().Bold(true).Render("Export Filename:"))
+	b.WriteString(labelStyle.Render("Export Filename:"))
 	b.WriteString("\n\n")
 
 	// Show current filename with cursor if editing
@@ -91,7 +91,7 @@ func RenderExportView(m *models.Model) string {
 	}
 	if m.Message != "" {
 		b.WriteString("\n")
-		successMsgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFAA"))
+		successMsgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6EE7B7")) // Mint green
 		b.WriteString(successMsgStyle.Render(m.Message))
 	}
 

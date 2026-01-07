@@ -9,7 +9,7 @@ import (
 func RenderAboutView(m *models.Model) string {
 	aboutStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#7D56F4")).
+		BorderForeground(lipgloss.Color("#5B9BD5")). // Railway Blue
 		Padding(2, 4).
 		Width(60)
 

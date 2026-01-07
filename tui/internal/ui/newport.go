@@ -11,45 +11,45 @@ import (
 var (
 	formTitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("170")).
+			Foreground(lipgloss.Color("#F4A261")). // Amber accent for form title
 			MarginBottom(1)
 
-	labelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
+	formLabelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#94A3B8")). // Secondary text
 			MarginRight(1)
 
 	inputBoxStyle = lipgloss.NewStyle().
 			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240")).
+			BorderForeground(lipgloss.Color("#475569")). // Slate
 			Padding(0, 1).
 			Width(44)
 
 	focusedInputBoxStyle = lipgloss.NewStyle().
 				BorderStyle(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("170")).
+				BorderForeground(lipgloss.Color("#F4A261")). // Amber when focused
 				Padding(0, 1).
 				Width(44)
 
 	buttonStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("240")).
-			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("#475569")). // Slate
+			Foreground(lipgloss.Color("#E2E8F0")). // Soft white
 			Padding(0, 2).
 			MarginRight(2)
 
 	focusedButtonStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("170")).
-				Foreground(lipgloss.Color("15")).
+				Background(lipgloss.Color("#F4A261")). // Amber when focused
+				Foreground(lipgloss.Color("#1E293B")). // Dark slate
 				Padding(0, 2).
 				MarginRight(2).
 				Bold(true)
 
 	formErrorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
+			Foreground(lipgloss.Color("#F87171")). // Soft coral
 			Bold(true).
 			MarginTop(1)
 
-	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
+	formHelpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#64748B")). // Muted
 			MarginTop(2)
 )
 
@@ -110,7 +110,7 @@ func RenderNewPortView(m *models.Model) string {
 	b.WriteString("\n")
 
 	// Help text
-	b.WriteString(helpStyle.Render(
+	b.WriteString(formHelpStyle.Render(
 		"[Tab] Next Field  [Shift+Tab] Previous Field  [Enter] Activate  [Esc] Cancel",
 	))
 

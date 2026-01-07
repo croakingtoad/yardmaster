@@ -10,42 +10,76 @@ import (
 )
 
 var (
+	// Railway Professional Color Scheme
+	// Brand: Railway Blue (#5B9BD5), Amber Accent (#F4A261)
+
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#7D56F4")).
+			Foreground(lipgloss.Color("#5B9BD5")). // Railway Blue
 			Padding(0, 1)
 
 	selectedStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#7D56F4")).
-			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#F4A261")). // Amber Accent
+			Foreground(lipgloss.Color("#1E293B")). // Dark slate for contrast
+			Bold(true).
 			Padding(0, 1)
 
 	normalStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#E2E8F0")). // Soft white
 			Padding(0, 1)
 
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#00FFFF"))
+			Foreground(lipgloss.Color("#5B9BD5")) // Railway Blue (replaces harsh cyan)
 
 	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00FF00"))
+			Foreground(lipgloss.Color("#6EE7B7")) // Mint green (replaces harsh green)
 
 	mutedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666"))
+			Foreground(lipgloss.Color("#64748B")) // Muted slate
 
 	borderStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#7D56F4")).
+			BorderForeground(lipgloss.Color("#5B9BD5")). // Railway Blue
 			Padding(1, 2)
 )
 
 var (
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF0000")).
+			Foreground(lipgloss.Color("#F87171")). // Soft coral (replaces harsh red)
 			Bold(true)
 
 	warningStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFAA00"))
+			Foreground(lipgloss.Color("#FCD34D")) // Warm amber
+
+	// Additional semantic styles
+	labelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#94A3B8")) // Secondary text for labels
+
+	valueStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#E2E8F0")). // Primary text
+			Bold(true)
+
+	highlightStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F4A261")). // Amber accent for key values
+			Bold(true)
+
+	urlStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#60A5FA")). // Sky blue for URLs
+			Underline(true)
+
+	processStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#60A5FA")) // Info blue for process details
+
+	pathStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#7DD3FC")). // Lighter sky blue
+			Italic(true)
+
+	securityEnabledStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6EE7B7")) // Mint = secured
+
+	securityDisabledStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#64748B")) // Muted = not secured
 )
 
 // RenderListView renders the main port list view
@@ -64,7 +98,7 @@ func RenderListView(m *models.Model) string {
 
 	// Show message if any
 	if m.Message != "" {
-		msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFAA"))
+		msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA")) // Info blue
 		b.WriteString(msgStyle.Render(fmt.Sprintf("ℹ️  %s", m.Message)) + "\n\n")
 	}
 
@@ -95,32 +129,6 @@ func RenderListView(m *models.Model) string {
 				cursor = "❯"
 			}
 
-			// Security indicator from actual config
-			securityIcon := "🔓"
-			securityText := "No Auth"
-			if port.Security != nil {
-				if port.Security.BasicAuth && port.Security.IPRestrictions {
-					securityIcon = "🔒"
-					securityText = "Basic Auth + IP"
-				} else if port.Security.BasicAuth {
-					securityIcon = "🔒"
-					securityText = "Basic Auth"
-				} else if port.Security.IPRestrictions {
-					securityIcon = "🔒"
-					securityText = "IP Restricted"
-				}
-			}
-
-			// Domain type from actual config
-			domainIcon := "🎲"
-			domainType := "Random Domain"
-			if port.Security != nil && port.Security.CustomDomain {
-				domainIcon = "🌐"
-				domainType = "Custom Domain"
-			}
-
-			// Relative time
-			relTime := formatRelativeTime(port.RegisteredAt)
 
 			// Format port info
 			portLine := fmt.Sprintf("%s %s", cursor, port.AppName)
@@ -130,16 +138,24 @@ func RenderListView(m *models.Model) string {
 				portLine = normalStyle.Render(portLine)
 			}
 
-			portInfo := fmt.Sprintf("Port: %d [ACTIVE]", port.Port)
-			ngrokURL := "(not tunneled)"
-			if port.NgrokURL != nil {
-				ngrokURL = *port.NgrokURL
+			// Port info with amber highlight for port number
+			portInfo := labelStyle.Render("Port: ") + highlightStyle.Render(fmt.Sprintf("%d", port.Port)) + " • " + statusStyle.Render("🟢 ACTIVE")
+
+			// Add security indicator with appropriate color
+			if port.Security != nil && (port.Security.BasicAuth || port.Security.IPRestrictions) {
+				portInfo += " • " + securityEnabledStyle.Render("🔒 Secured")
+			} else {
+				portInfo += " • " + securityDisabledStyle.Render("🔓 No Auth")
 			}
 
-			b.WriteString(portLine + strings.Repeat(" ", max(0, 50-len(port.AppName))) + statusStyle.Render(portInfo) + "\n")
-			b.WriteString(fmt.Sprintf("   └─ %s\n", ngrokURL))
-			b.WriteString(fmt.Sprintf("   └─ %s %s • %s %s\n", securityIcon, securityText, domainIcon, domainType))
-			b.WriteString(fmt.Sprintf("   └─ %s\n", mutedStyle.Render("Registered: "+relTime)))
+			ngrokURL := mutedStyle.Render("(not tunneled)")
+			if port.NgrokURL != nil {
+				ngrokURL = urlStyle.Render(*port.NgrokURL)
+			}
+
+			b.WriteString(portLine + "\n")
+			b.WriteString("    " + portInfo + "\n")
+			b.WriteString("    " + ngrokURL + "\n")
 			b.WriteString("\n")
 		}
 	}

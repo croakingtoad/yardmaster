@@ -13,7 +13,7 @@ func RenderSettingsView(m *models.Model) string {
 	// Create a bordered style for the settings panel
 	settingsStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#7D56F4")).
+		BorderForeground(lipgloss.Color("#5B9BD5")). // Railway Blue
 		Padding(1, 2).
 		Width(60)
 

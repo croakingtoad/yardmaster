@@ -8,6 +8,7 @@ import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname } from 'path';
 import * as lockfile from 'proper-lockfile';
+import { logger } from './logger.js';
 import type {
   PortRegistration,
   RegistryData,
@@ -132,6 +133,9 @@ export class PortRegistry {
     this.data.last_updated = new Date().toISOString();
     await this.save();
 
+    // Log registration event
+    await logger.logRegister(appName, port);
+
     return {
       success: true,
       app_name: appName,
@@ -153,6 +157,9 @@ export class PortRegistry {
       registration.ngrok_url = ngrokUrl;
       this.data.last_updated = new Date().toISOString();
       await this.save();
+
+      // Log tunnel URL update (this happens after tunnel creation)
+      await logger.logTunnelCreated(appName, registration.port, ngrokUrl);
     }
   }
 
@@ -174,16 +181,20 @@ export class PortRegistry {
     }
 
     // Mark as released (keep in registry for history)
+    const port = registration.port;
     registration.status = 'released';
     registration.ngrok_url = null;
     this.data.last_updated = new Date().toISOString();
     await this.save();
 
+    // Log release event
+    await logger.logRelease(appName, port);
+
     return {
       success: true,
       app_name: appName,
-      port: registration.port,
-      message: `Released port ${registration.port} from '${appName}'`
+      port,
+      message: `Released port ${port} from '${appName}'`
     };
   }
 

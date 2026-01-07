@@ -4,6 +4,7 @@
  */
 
 import ngrok from '@ngrok/ngrok';
+import { logger } from './logger.js';
 import type { Config, TunnelInfo } from './types/index.js';
 
 interface NgrokForwardOptions {
@@ -109,12 +110,20 @@ export class NgrokManager {
         listener
       });
 
+      // Log tunnel creation (additional log beyond registry's updateNgrokUrl)
+      await logger.logTunnelCreated(appName, port, url);
+
       return url;
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      // Log tunnel creation error
+      await logger.logError(`Failed to create tunnel for ${appName}:${port}`, appName, port, {
+        error: errorMessage
+      });
+
       throw new Error(
-        `Failed to create tunnel for ${appName}:${port}: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to create tunnel for ${appName}:${port}: ${errorMessage}`
       );
     }
   }
@@ -135,13 +144,21 @@ export class NgrokManager {
       // Close the ngrok listener
       await tunnel.listener.close();
 
+      // Log tunnel closure
+      await logger.logTunnelClosed(appName, tunnel.port);
+
       // Remove from active tunnels
       this.tunnels.delete(appName);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      // Log tunnel close error
+      await logger.logError(`Failed to close tunnel for ${appName}`, appName, tunnel.port, {
+        error: errorMessage
+      });
+
       throw new Error(
-        `Failed to close tunnel for ${appName}: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to close tunnel for ${appName}: ${errorMessage}`
       );
     }
   }

@@ -226,35 +226,128 @@ See [tui/README.md](tui/README.md) for complete documentation.
 
 To ensure AI agents use Yardmaster instead of hardcoded ports, add instructions to your project or global configuration.
 
+### Global Configuration (Recommended)
+
+Add this to `~/.claude/CLAUDE.md` to enable Yardmaster coordination for **all projects**:
+
+```markdown
+## 🚂 Yardmaster Port Management - CRITICAL RULES
+
+**BEFORE starting ANY server, API, or service, you MUST use Yardmaster for port allocation.**
+
+### Mandatory Workflow
+
+1. **Check** if yardmaster MCP is available (it should be)
+2. **Query** existing ports: `mcp.callTool('yardmaster', 'query_ports')`
+3. **Register** a port BEFORE starting server: `mcp.callTool('yardmaster', 'register_port', {app_name: 'project-name-component'})`
+4. **Use** the returned port number in your server config
+5. **Share** the returned ngrok URL with user (public access)
+6. **Release** when done: `mcp.callTool('yardmaster', 'release_port', {app_name: 'project-name-component'})`
+
+### Forbidden Actions
+
+❌ **NEVER** hardcode ports (3000, 8080, 5173, 5000, 8000, etc.)
+❌ **NEVER** start a server without registering with yardmaster first
+❌ **NEVER** use `PORT=3000` or similar hardcoded environment variables
+❌ **NEVER** skip yardmaster even if "just testing" or "quick prototype"
+
+### Why This Matters
+
+- Prevents port conflicts across projects
+- Provides instant public URLs via ngrok
+- Enables port coordination across multiple agents
+- Tracks what's running where
+- Automatic cleanup and port recycling
+
+### Examples
+
+#### Starting a Vite dev server:
+\`\`\`javascript
+// 1. Register port first
+const result = await mcp.callTool('yardmaster', 'register_port', {
+  app_name: 'myproject-frontend'
+});
+// Returns: { port: 3024, ngrok_url: "https://abc123.ngrok.app" }
+
+// 2. Configure vite with assigned port
+// vite.config.ts:
+export default defineConfig({
+  server: { port: 3024 }  // Use result.port
+})
+
+// 3. Tell user the public URL
+console.log("Frontend running at:", result.ngrok_url);
+\`\`\`
+
+#### Starting a Node/Express API:
+\`\`\`javascript
+const result = await mcp.callTool('yardmaster', 'register_port', {
+  app_name: 'myproject-api'
+});
+
+app.listen(result.port, () => {
+  console.log(\`API: \${result.ngrok_url}\`);
+});
+\`\`\`
+
+#### Starting multiple services:
+\`\`\`javascript
+// Register each service with descriptive names
+const frontend = await mcp.callTool('yardmaster', 'register_port', {app_name: 'myapp-web'});
+const api = await mcp.callTool('yardmaster', 'register_port', {app_name: 'myapp-api'});
+const db = await mcp.callTool('yardmaster', 'register_port', {app_name: 'myapp-postgres'});
+
+// Use assigned ports for each service
+// frontend.port, api.port, db.port
+\`\`\`
+
+### Naming Convention
+
+Use descriptive app names: `{project}-{component}`
+- ✅ `ecommerce-frontend`, `ecommerce-api`, `ecommerce-admin`
+- ✅ `blog-web`, `blog-cms`, `blog-search`
+- ❌ `app`, `test`, `server` (too generic)
+
+### Error Handling
+
+\`\`\`javascript
+const result = await mcp.callTool('yardmaster', 'register_port', {
+  app_name: 'myapp-web'
+});
+
+if (!result.success) {
+  // Handle port unavailable - try a different name or check what's using ports
+  const ports = await mcp.callTool('yardmaster', 'query_ports');
+  console.log("Existing ports:", ports);
+}
+\`\`\`
+
+### Cleanup
+
+Always release ports when done:
+\`\`\`bash
+# At end of session or when stopping server
+await mcp.callTool('yardmaster', 'release_port', {app_name: 'myapp-web'});
+\`\`\`
+
+**This is not optional. Always use Yardmaster for port management.**
+```
+
 ### Project-Level Configuration
 
-Create or update `/path/to/your/project/CLAUDE.md`:
+For project-specific instructions, create `/path/to/your/project/CLAUDE.md`:
 
 ```markdown
 ## Port Management
 
-Before starting any development server:
+This project uses Yardmaster for port coordination.
 
-1. Register port: `mcp.callTool('yardmaster', 'register_port', {app_name: 'your-app'})`
-2. Use returned port number in server configuration
-3. Share returned ngrok URL with user
-4. Release when done: `mcp.callTool('yardmaster', 'release_port', {app_name: 'your-app'})`
+**Services:**
+- Frontend: Register as `projectname-web`
+- API: Register as `projectname-api`
+- Database: Register as `projectname-db`
 
-Never hardcode ports (3000, 8080, 5173, etc.). Always use Yardmaster.
-```
-
-### Global Configuration
-
-Add to `~/.claude/CLAUDE.md` for all projects:
-
-```markdown
-## Port Management Protocol
-
-Before starting servers, APIs, or services:
-1. Check existing: `mcp.callTool('yardmaster', 'query_ports')`
-2. Register port: `mcp.callTool('yardmaster', 'register_port', {app_name: 'name'})`
-3. Use assigned port
-4. Release when done: `mcp.callTool('yardmaster', 'release_port', {app_name: 'name'})`
+See global CLAUDE.md for full Yardmaster workflow.
 ```
 
 ### Example Workflow

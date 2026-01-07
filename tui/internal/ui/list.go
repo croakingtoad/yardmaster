@@ -219,8 +219,8 @@ func renderWithMenu(content string, m *models.Model) string {
 		Foreground(lipgloss.Color("#FFFFFF"))
 
 	menuSelectedStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("#7D56F4")).
-		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(lipgloss.Color("#F4A261")). // Amber accent
+		Foreground(lipgloss.Color("#1E293B")). // Dark slate
 		Bold(true)
 
 	menuItems := []struct {

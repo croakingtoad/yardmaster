@@ -41,44 +41,44 @@ func convertToLogEntry(entry interface{}) (*logEntryWrapper, error) {
 var (
 	logHeaderStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("39")).
+			Foreground(lipgloss.Color("#5B9BD5")). // Railway Blue
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderBottom(true).
-			BorderForeground(lipgloss.Color("240"))
+			BorderForeground(lipgloss.Color("#475569")) // Slate
 
 	logRegisterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("42")) // Green
+				Foreground(lipgloss.Color("#6EE7B7")) // Mint green
 
 	logReleaseStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("203")) // Red
+			Foreground(lipgloss.Color("#F87171")) // Soft coral
 
 	logTunnelCreateStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")) // Blue
+				Foreground(lipgloss.Color("#60A5FA")) // Sky blue
 
 	logTunnelCloseStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("214")) // Orange
+				Foreground(lipgloss.Color("#F4A261")) // Amber
 
 	logErrorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("231")).
-			Background(lipgloss.Color("196")).
-			Bold(true) // White text on red background
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#F87171")).
+			Bold(true) // White on soft coral
 
 	logOtherStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("250")) // Gray
+			Foreground(lipgloss.Color("#94A3B8")) // Secondary text
 
 	logSelectedStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("237")).
+				Background(lipgloss.Color("#334155")). // Dark slate
 				Bold(true)
 
 	logFilterStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("226")).
+			Foreground(lipgloss.Color("#FCD34D")). // Warm amber
 			Bold(true)
 
 	logHelpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("244"))
+			Foreground(lipgloss.Color("#64748B")) // Muted
 
 	logInfoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39"))
+			Foreground(lipgloss.Color("#60A5FA")) // Sky blue
 )
 
 // RenderLogsView renders the logs viewer

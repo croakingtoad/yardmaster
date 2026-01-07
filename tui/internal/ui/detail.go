@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -37,10 +38,27 @@ func RenderDetailView(m *models.Model) string {
 	details += fmt.Sprintf("  App Name:          %s\n", port.AppName)
 	details += fmt.Sprintf("  Port:              %d\n", port.Port)
 	details += fmt.Sprintf("  Status:            %s\n", statusStyle.Render("🟢 ACTIVE"))
-	if port.PID != nil {
-		details += fmt.Sprintf("  Process ID:        %d\n", *port.PID)
+
+	// Get process information
+	if procInfo, err := models.GetProcessOnPort(port.Port); err == nil {
+		details += fmt.Sprintf("  Process ID:        %d\n", procInfo.PID)
+		details += fmt.Sprintf("  Binary:            %s\n", procInfo.GetBinaryName())
+		if procInfo.WorkDir != "" {
+			// Shorten home directory to ~
+			workDir := procInfo.WorkDir
+			if home, err := os.UserHomeDir(); err == nil {
+				workDir = strings.Replace(workDir, home, "~", 1)
+			}
+			details += fmt.Sprintf("  Working Dir:       %s\n", workDir)
+		}
 	} else {
-		details += "  Process ID:        (none)\n"
+		// Fallback to registry PID if available
+		if port.PID != nil {
+			details += fmt.Sprintf("  Process ID:        %d\n", *port.PID)
+		} else {
+			details += "  Process ID:        (none)\n"
+		}
+		details += "  Binary:            (not detected)\n"
 	}
 	details += "\n"
 

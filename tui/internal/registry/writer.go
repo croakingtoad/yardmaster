@@ -66,26 +66,3 @@ func (w *Writer) writeLocked(data *RegistryData) error {
 
 	return nil
 }
-
-// UpdatePortSecurity updates security settings for a specific port
-func (w *Writer) UpdatePortSecurity(portNum int, security *SecurityInfo) error {
-	return withRegistryLock(w.registryPath, func() error {
-		reader := &Reader{registryPath: w.registryPath}
-		registry, err := reader.readLocked()
-		if err != nil {
-			return fmt.Errorf("failed to read registry: %w", err)
-		}
-
-		// Registry is keyed by port number as string.
-		portKey := fmt.Sprintf("%d", portNum)
-		port, exists := registry.Ports[portKey]
-		if !exists {
-			return fmt.Errorf("port %d not found in registry", portNum)
-		}
-
-		port.Security = security
-		registry.Ports[portKey] = port
-
-		return w.writeLocked(registry)
-	})
-}

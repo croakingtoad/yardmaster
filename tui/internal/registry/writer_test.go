@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,63 +75,42 @@ func TestWriterWriteReclaimsStaleLock(t *testing.T) {
 	}
 }
 
-func TestWriterUpdatePortSecurityDoesNotLoseConcurrentUpdates(t *testing.T) {
+func TestWriterWriteSerializesConcurrentWrites(t *testing.T) {
 	tmpDir := t.TempDir()
 	registryPath := filepath.Join(tmpDir, "registry.json")
-	const portCount = 32
-	data := emptyRegistry()
-	for i := 0; i < portCount; i++ {
-		port := 3000 + i
-		data.Ports[fmt.Sprintf("%d", port)] = PortRegistration{
-			AppName:      fmt.Sprintf("app-%d", port),
-			Port:         port,
-			RegisteredAt: time.Now(),
-			Status:       "active",
-		}
-	}
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		t.Fatalf("marshal initial registry: %v", err)
-	}
-	if err := os.WriteFile(registryPath, encoded, 0o644); err != nil {
-		t.Fatalf("write initial registry: %v", err)
-	}
-
+	const writeCount = 32
 	writer := NewWriter(registryPath)
 	start := make(chan struct{})
-	errs := make(chan error, portCount)
+	errs := make(chan error, writeCount)
 	var ready sync.WaitGroup
-	ready.Add(portCount)
-	for i := 0; i < portCount; i++ {
-		port := 3000 + i
-		go func() {
+	ready.Add(writeCount)
+	for i := 0; i < writeCount; i++ {
+		go func(writeNumber int) {
 			ready.Done()
 			<-start
-			errs <- writer.UpdatePortSecurity(port, &SecurityInfo{
-				BasicAuth:      true,
-				IPRestrictions: true,
-				CustomDomain:   true,
-			})
-		}()
+			data := emptyRegistry()
+			data.Version = fmt.Sprintf("write-%d", writeNumber)
+			errs <- writer.Write(data)
+		}(i)
 	}
 	ready.Wait()
 	close(start)
-	for i := 0; i < portCount; i++ {
+	for i := 0; i < writeCount; i++ {
 		if err := <-errs; err != nil {
-			t.Fatalf("update port security: %v", err)
+			t.Fatalf("concurrent write: %v", err)
 		}
 	}
 
-	result, err := (&Reader{registryPath: registryPath}).Read()
+	encoded, err := os.ReadFile(registryPath)
 	if err != nil {
 		t.Fatalf("read final registry: %v", err)
 	}
-	for i := 0; i < portCount; i++ {
-		port := 3000 + i
-		security := result.Ports[fmt.Sprintf("%d", port)].Security
-		if security == nil || !security.BasicAuth || !security.IPRestrictions || !security.CustomDomain {
-			t.Errorf("security update for port %d was lost: %#v", port, security)
-		}
+	var result RegistryData
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		t.Fatalf("concurrent writes produced invalid JSON: %v", err)
+	}
+	if !strings.HasPrefix(result.Version, "write-") {
+		t.Errorf("final registry does not match a complete write: version %q", result.Version)
 	}
 }
 

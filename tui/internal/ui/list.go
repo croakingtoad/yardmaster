@@ -76,10 +76,10 @@ var (
 			Italic(true)
 
 	securityEnabledStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6EE7B7")) // Mint = secured
+				Foreground(lipgloss.Color("#6EE7B7")) // Mint = secured
 
 	securityDisabledStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#64748B")) // Muted = not secured
+				Foreground(lipgloss.Color("#64748B")) // Muted = not secured
 )
 
 // RenderListView renders the main port list view
@@ -128,7 +128,6 @@ func RenderListView(m *models.Model) string {
 			if i == m.Cursor {
 				cursor = "❯"
 			}
-
 
 			// Format port info
 			portLine := fmt.Sprintf("%s %s", cursor, port.AppName)
@@ -224,19 +223,19 @@ func renderWithMenu(content string, m *models.Model) string {
 		Bold(true)
 
 	menuItems := []struct {
-		label string
+		label       string
 		isSeparator bool
 	}{
-		{"Register New Port", false},     // 0
-		{"Release Selected", false},      // 1
-		{"Edit Security", false},         // 2
-		{"View Logs", false},             // 3
-		{"──────────────", true},         // 4
-		{"Configuration", false},         // 5
-		{"Export Registry", false},       // 6
-		{"──────────────", true},         // 7
-		{"About", false},                 // 8
-		{"Quit", false},                  // 9
+		{"Register New Port", false}, // 0
+		{"Release Selected", false},  // 1
+		{"Security Status", false},   // 2
+		{"View Logs", false},         // 3
+		{"──────────────", true},     // 4
+		{"Configuration", false},     // 5
+		{"Export Registry", false},   // 6
+		{"──────────────", true},     // 7
+		{"About", false},             // 8
+		{"Quit", false},              // 9
 	}
 
 	menu := headerStyle.Render("Admin Menu") + "\n\n"

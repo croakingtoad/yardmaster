@@ -112,7 +112,7 @@ func RenderDetailView(m *models.Model) string {
 	b.WriteString("\n\n")
 
 	// Keybindings
-	keybindings := mutedStyle.Render("[Esc] Back • [E] Edit • [D] Delete • [C] Copy URL • [Q] Quit")
+	keybindings := mutedStyle.Render("[Esc] Back • [S] Security Status • [D] Delete • [C] Copy URL • [Q] Quit")
 	b.WriteString(keybindings)
 
 	return borderStyle.Render(b.String())

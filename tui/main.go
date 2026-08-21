@@ -116,8 +116,8 @@ func (a *appModel) View() string {
 		return ui.RenderSettingsView(a.Model)
 	case models.ViewLogs:
 		return ui.RenderLogsView(a.Model)
-	case models.ViewEditSecurity:
-		return ui.RenderEditSecurityView(a.Model)
+	case models.ViewSecurityStatus:
+		return ui.RenderSecurityStatusView(a.Model)
 	default:
 		return ui.RenderListView(a.Model)
 	}

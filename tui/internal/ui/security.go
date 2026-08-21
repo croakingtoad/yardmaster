@@ -7,85 +7,52 @@ import (
 	"github.com/croakingtoad/yardmaster/tui/internal/models"
 )
 
-// RenderEditSecurityView renders the security editor screen
-func RenderEditSecurityView(m *models.Model) string {
+// RenderSecurityStatusView renders the recorded security status for a port.
+func RenderSecurityStatusView(m *models.Model) string {
 	var b strings.Builder
 
-	// Title
-	title := titleStyle.Render(fmt.Sprintf("🔒 Edit Security: %s", m.SecurityEditAppName))
+	title := titleStyle.Render(fmt.Sprintf("🔒 Security Status: %s", m.SecurityStatusAppName))
 	b.WriteString(title + "\n\n")
 
-	// Instructions
-	instructions := mutedStyle.Render("Use ↑/↓ to navigate • Space/Enter to toggle • [S] Save • [Esc] Cancel")
-	b.WriteString(instructions + "\n\n")
-
-	// Security options
-	options := []struct {
-		name        string
-		description string
-		enabled     bool
-		index       int
+	statuses := []struct {
+		name    string
+		enabled bool
 	}{
 		{
-			name:        "Basic Authentication",
-			description: "Require username and password for access",
-			enabled:     m.SecurityEditBasicAuth,
-			index:       0,
+			name:    "Basic Authentication",
+			enabled: m.SecurityStatus != nil && m.SecurityStatus.BasicAuth,
 		},
 		{
-			name:        "IP Restrictions",
-			description: "Limit access to specific IP addresses",
-			enabled:     m.SecurityEditIPRestrict,
-			index:       1,
+			name:    "IP Restrictions",
+			enabled: m.SecurityStatus != nil && m.SecurityStatus.IPRestrictions,
 		},
 		{
-			name:        "Custom Domain",
-			description: "Use custom domain for ngrok tunnel",
-			enabled:     m.SecurityEditCustomDomain,
-			index:       2,
+			name:    "Custom Domain",
+			enabled: m.SecurityStatus != nil && m.SecurityStatus.CustomDomain,
 		},
 	}
 
-	// Render each option
-	for _, opt := range options {
-		cursor := "  "
-		if opt.index == m.SecurityEditCursor {
-			cursor = "❯ "
+	for _, status := range statuses {
+		value := "Not enabled"
+		style := securityDisabledStyle
+		if status.enabled {
+			value = "Enabled"
+			style = securityEnabledStyle
 		}
-
-		// Status indicator
-		statusIcon := "☐"
-		if opt.enabled {
-			statusIcon = "☑"
-		}
-
-		// Option line
-		optionLine := fmt.Sprintf("%s%s %s", cursor, statusIcon, opt.name)
-		if opt.index == m.SecurityEditCursor {
-			optionLine = selectedStyle.Render(optionLine)
-		} else {
-			optionLine = normalStyle.Render(optionLine)
-		}
-
-		b.WriteString(optionLine + "\n")
-
-		// Description (indented)
-		descLine := "     " + mutedStyle.Render(opt.description)
-		b.WriteString(descLine + "\n\n")
+		b.WriteString(style.Render(fmt.Sprintf("  %s: %s", status.name, value)) + "\n\n")
 	}
 
-	// Show error if any
 	if m.Error != nil {
 		b.WriteString("\n")
 		errorMsg := errorStyle.Render(fmt.Sprintf("⚠️  Error: %s", m.Error.Error()))
 		b.WriteString(errorMsg + "\n")
 	}
 
-	// Footer
 	b.WriteString("\n")
 	b.WriteString("─────────────────────────────────────────────────────────────────\n")
-	footer := mutedStyle.Render("Changes will take effect immediately after saving")
-	b.WriteString(footer + "\n")
+	b.WriteString(mutedStyle.Render("This read-only view reflects the ngrok configuration in effect when this port was registered.") + "\n")
+	b.WriteString(mutedStyle.Render("To change them, edit ~/.yardmaster/config.json and register the port again.") + "\n")
+	b.WriteString(mutedStyle.Render("[Esc] Back") + "\n")
 
 	return borderStyle.Render(b.String())
 }

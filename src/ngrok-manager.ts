@@ -4,7 +4,7 @@
  */
 
 import ngrok, { type Listener } from '@ngrok/ngrok';
-import { logger } from './logger.js';
+import { logger as defaultLogger, type Logger } from './logger.js';
 import type { Config, TunnelInfo } from './types/index.js';
 
 export interface NgrokForwardOptions {
@@ -34,12 +34,18 @@ export class NgrokManager {
   private tunnels: Map<string, ActiveTunnel>;
   private initialized: boolean;
   private sdk: NgrokSdk;
+  private activityLogger: Logger;
 
-  constructor(config: Config, sdk: NgrokSdk = ngrok) {
+  constructor(
+    config: Config,
+    sdk: NgrokSdk = ngrok,
+    activityLogger: Logger = defaultLogger
+  ) {
     this.config = config;
     this.tunnels = new Map();
     this.initialized = false;
     this.sdk = sdk;
+    this.activityLogger = activityLogger;
   }
 
   /**
@@ -124,14 +130,14 @@ export class NgrokManager {
       });
 
       // Log tunnel creation (additional log beyond registry's updateNgrokUrl)
-      await logger.logTunnelCreated(appName, port, url);
+      await this.activityLogger.logTunnelCreated(appName, port, url);
 
       return url;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
       // Log tunnel creation error
-      await logger.logError(`Failed to create tunnel for ${appName}:${port}`, appName, port, {
+      await this.activityLogger.logError(`Failed to create tunnel for ${appName}:${port}`, appName, port, {
         error: errorMessage
       });
 
@@ -158,7 +164,7 @@ export class NgrokManager {
       await tunnel.listener.close();
 
       // Log tunnel closure
-      await logger.logTunnelClosed(appName, tunnel.port);
+      await this.activityLogger.logTunnelClosed(appName, tunnel.port);
 
       // Remove from active tunnels
       this.tunnels.delete(appName);
@@ -166,7 +172,7 @@ export class NgrokManager {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
       // Log tunnel close error
-      await logger.logError(`Failed to close tunnel for ${appName}`, appName, tunnel.port, {
+      await this.activityLogger.logError(`Failed to close tunnel for ${appName}`, appName, tunnel.port, {
         error: errorMessage
       });
 

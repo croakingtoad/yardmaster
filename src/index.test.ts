@@ -13,6 +13,7 @@ import { join } from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { YardmasterServer } from './index.js';
+import { Logger } from './logger.js';
 import { PortRegistry } from './registry.js';
 import type { Config } from './types/index.js';
 
@@ -28,6 +29,7 @@ function makeConfig(dir: string, authToken = 'test-token'): Config {
 let tmpDir: string;
 let registry: PortRegistry;
 let clients: Client[];
+let activityLogger: Logger;
 
 async function connectClient(server: YardmasterServer): Promise<Client> {
   const [clientTransport, serverTransport] =
@@ -66,7 +68,8 @@ function getTextContent(result: unknown): string {
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'ym-server-test-'));
-  registry = new PortRegistry(makeConfig(tmpDir));
+  activityLogger = new Logger(join(tmpDir, 'logs', 'activity.log'));
+  registry = new PortRegistry(makeConfig(tmpDir), activityLogger);
   await registry.initialize();
   clients = [];
 });
@@ -95,7 +98,7 @@ describe('register_port handler logic', () => {
   });
 
   it('rollback: port is freed when ngrok tunnel creation fails', async () => {
-    const server = new YardmasterServer();
+    const server = new YardmasterServer(activityLogger);
     await server.initialize(makeConfig(tmpDir, ''));
     const client = await connectClient(server);
 
@@ -198,7 +201,7 @@ describe('get_available_port handler logic', () => {
 
 describe('YardmasterServer.ensureInitialized()', () => {
   it('returns a descriptive error through MCP before initialization', async () => {
-    const server = new YardmasterServer();
+    const server = new YardmasterServer(activityLogger);
     const client = await connectClient(server);
 
     const response = await client.callTool({

@@ -8,16 +8,21 @@ import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { pathToFileURL } from 'url';
+import { Logger } from './logger.js';
 import { PortRegistry } from './registry.js';
 import type { Config, PortRegistrationResult } from './types/index.js';
 
 const REGISTRY_WORKER_SOURCE = `
 const { PortRegistry } = await import(process.env.YARDMASTER_REGISTRY_MODULE_URL);
+const { Logger } = await import(process.env.YARDMASTER_LOGGER_MODULE_URL);
 
 const config = JSON.parse(process.env.YARDMASTER_REGISTRY_CONFIG);
-const registry = new PortRegistry(config);
+const registry = new PortRegistry(
+  config,
+  new Logger(process.env.YARDMASTER_WORKER_LOG_PATH)
+);
 
 try {
   await registry.initialize();
@@ -80,9 +85,16 @@ function startRegistryWorker(
         YARDMASTER_REGISTRY_MODULE_URL: pathToFileURL(
           join(process.cwd(), 'dist', 'registry.js')
         ).href,
+        YARDMASTER_LOGGER_MODULE_URL: pathToFileURL(
+          join(process.cwd(), 'dist', 'logger.js')
+        ).href,
         YARDMASTER_REGISTRY_CONFIG: JSON.stringify(workerConfig),
         YARDMASTER_WORKER_APP: appName,
-        YARDMASTER_WORKER_PORT: String(port)
+        YARDMASTER_WORKER_PORT: String(port),
+        YARDMASTER_WORKER_LOG_PATH: join(
+          dirname(workerConfig.registry.path),
+          `${appName}.activity.log`
+        )
       },
       stdio: ['ignore', 'ignore', 'pipe', 'ipc']
     }
@@ -156,11 +168,13 @@ function makeConfig(registryDir: string): Config {
 let tmpDir: string;
 let config: Config;
 let registry: PortRegistry;
+let activityLogger: Logger;
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'yardmaster-test-'));
   config = makeConfig(tmpDir);
-  registry = new PortRegistry(config);
+  activityLogger = new Logger(join(tmpDir, 'logs', 'activity.log'));
+  registry = new PortRegistry(config, activityLogger);
   await registry.initialize();
 });
 
@@ -183,7 +197,7 @@ describe('PortRegistry.initialize()', () => {
     await registry.registerPort('preexisting', 4000);
 
     // Create a new instance pointing at the same file
-    const registry2 = new PortRegistry(config);
+    const registry2 = new PortRegistry(config, activityLogger);
     await registry2.initialize();
 
     const reg = registry2.getRegistrationByApp('preexisting');
@@ -197,7 +211,7 @@ describe('PortRegistry.initialize()', () => {
   ]) {
     it(`rejects ${name} without overwriting it`, async () => {
       await writeFile(config.registry.path, invalidRegistry, 'utf8');
-      const freshRegistry = new PortRegistry(config);
+      const freshRegistry = new PortRegistry(config, activityLogger);
 
       await assert.rejects(async () => await freshRegistry.initialize());
       assert.strictEqual(
@@ -273,7 +287,7 @@ describe('PortRegistry cross-process transactions', () => {
   it('reloads fresh state for every mutation and reconciles the instance', async () => {
     await registry.registerPort('target', 4000);
 
-    const urlWriter = new PortRegistry(config);
+    const urlWriter = new PortRegistry(config, activityLogger);
     await urlWriter.initialize();
     await registry.registerPort('peer-before-url', 4001);
     await urlWriter.updateNgrokUrl('target', 'https://target.ngrok.io');
@@ -283,7 +297,7 @@ describe('PortRegistry cross-process transactions', () => {
       'https://target.ngrok.io'
     );
 
-    const monitorWriter = new PortRegistry(config);
+    const monitorWriter = new PortRegistry(config, activityLogger);
     await monitorWriter.initialize();
     await registry.registerPort('peer-before-monitor', 4002);
     assert.strictEqual(await monitorWriter.setMonitor('target', true), true);
@@ -293,14 +307,14 @@ describe('PortRegistry cross-process transactions', () => {
       true
     );
 
-    const releaseWriter = new PortRegistry(config);
+    const releaseWriter = new PortRegistry(config, activityLogger);
     await releaseWriter.initialize();
     await registry.registerPort('peer-before-release', 4003);
     assert.strictEqual((await releaseWriter.releasePort('target')).success, true);
     assert.strictEqual(releaseWriter.queryPorts().total, 3);
     assert.strictEqual(releaseWriter.getRegistrationByApp('target'), null);
 
-    const persisted = new PortRegistry(config);
+    const persisted = new PortRegistry(config, activityLogger);
     await persisted.initialize();
     assert.deepStrictEqual(
       persisted

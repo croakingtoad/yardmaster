@@ -17,6 +17,7 @@ import {
 import { loadConfig } from './config.js';
 import { PortRegistry } from './registry.js';
 import { NgrokManager } from './ngrok-manager.js';
+import { logger as defaultLogger, type Logger } from './logger.js';
 import type { Config } from './types/index.js';
 
 /**
@@ -26,8 +27,10 @@ export class YardmasterServer {
   private server: Server;
   private registry?: PortRegistry;
   private ngrokManager?: NgrokManager;
+  private activityLogger: Logger;
 
-  constructor() {
+  constructor(activityLogger: Logger = defaultLogger) {
+    this.activityLogger = activityLogger;
     this.server = new Server(
       {
         name: 'yardmaster',
@@ -389,10 +392,10 @@ export class YardmasterServer {
    * Initialize registry and tunnel management for request handling
    */
   async initialize(config: Config): Promise<void> {
-    this.registry = new PortRegistry(config);
+    this.registry = new PortRegistry(config, this.activityLogger);
     await this.registry.initialize();
 
-    this.ngrokManager = new NgrokManager(config);
+    this.ngrokManager = new NgrokManager(config, undefined, this.activityLogger);
   }
 
   /**

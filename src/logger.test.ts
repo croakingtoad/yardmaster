@@ -29,7 +29,8 @@ describe('Logger', () => {
   });
 
   it('should create log directory on first write', async () => {
-    await logger.logRegister('test-app', 3000);
+    const result = await logger.logRegister('test-app', 3000);
+    assert.strictEqual(result.status, 'written');
     assert.ok(existsSync(logDir), 'Log directory should exist');
     assert.ok(existsSync(logPath), 'Log file should exist');
   });

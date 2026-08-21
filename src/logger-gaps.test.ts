@@ -4,7 +4,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { chmod, mkdtemp, readFile, rm } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Logger } from './logger.js';
@@ -46,16 +46,17 @@ describe('Logger — edge cases', () => {
     assert.strictEqual(entry.details.success, false);
   });
 
-  it('should silently swallow write errors (not throw)', async () => {
-    // Create the log file, then make it unwritable
+  it('reports a degraded result for write errors without throwing', async () => {
+    // Replace the initialized log file with a directory so appendFile fails
+    // reliably even when the tests run with elevated permissions.
     await logger.logRegister('setup-app', 9000);
-    await chmod(logPath, 0o444); // read-only
+    await rm(logPath);
+    await mkdir(logPath);
 
-    // This must not throw — logger eats the error
-    await assert.doesNotReject(
-      async () => await logger.logRegister('fail-app', 9001),
-      'Logger should not propagate file write errors'
-    );
+    const result = await logger.logRegister('fail-app', 9001);
+
+    assert.strictEqual(result.status, 'degraded');
+    assert.match(result.error, /activity\.log|directory|EISDIR/i);
   });
 
   it('should handle concurrent writes without corruption', async () => {

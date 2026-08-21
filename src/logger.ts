@@ -15,8 +15,12 @@ export interface LogEntry {
   port?: number;
   url?: string;
   message?: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
+
+export type LogWriteResult =
+  | { status: 'written' }
+  | { status: 'degraded'; error: string };
 
 export class Logger {
   private logPath: string;
@@ -51,7 +55,7 @@ export class Logger {
   async logEvent(
     event: LogEntry['event'],
     data: Omit<LogEntry, 'timestamp' | 'event'>
-  ): Promise<void> {
+  ): Promise<LogWriteResult> {
     try {
       await this.ensureLogDirectory();
 
@@ -64,18 +68,26 @@ export class Logger {
       // Write as JSON Lines format (one JSON object per line)
       const line = JSON.stringify(entry) + '\n';
       await appendFile(this.logPath, line, 'utf-8');
+      return { status: 'written' };
     } catch (error) {
       // Don't throw - logging failures should not crash the application
-      // In production, this could be sent to a monitoring service
-      console.error('Failed to write log entry:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        status: 'degraded',
+        error: `Failed to write activity log '${this.logPath}': ${message}`
+      };
     }
   }
 
   /**
    * Log port registration
    */
-  async logRegister(appName: string, port: number, ngrokUrl?: string): Promise<void> {
-    await this.logEvent('register', {
+  async logRegister(
+    appName: string,
+    port: number,
+    ngrokUrl?: string
+  ): Promise<LogWriteResult> {
+    return await this.logEvent('register', {
       app: appName,
       port,
       url: ngrokUrl,
@@ -86,8 +98,8 @@ export class Logger {
   /**
    * Log port release
    */
-  async logRelease(appName: string, port: number): Promise<void> {
-    await this.logEvent('release', {
+  async logRelease(appName: string, port: number): Promise<LogWriteResult> {
+    return await this.logEvent('release', {
       app: appName,
       port,
       details: { success: true }
@@ -97,8 +109,12 @@ export class Logger {
   /**
    * Log tunnel creation
    */
-  async logTunnelCreated(appName: string, port: number, url: string): Promise<void> {
-    await this.logEvent('tunnel_created', {
+  async logTunnelCreated(
+    appName: string,
+    port: number,
+    url: string
+  ): Promise<LogWriteResult> {
+    return await this.logEvent('tunnel_created', {
       app: appName,
       port,
       url,
@@ -109,8 +125,8 @@ export class Logger {
   /**
    * Log tunnel closure
    */
-  async logTunnelClosed(appName: string, port: number): Promise<void> {
-    await this.logEvent('tunnel_closed', {
+  async logTunnelClosed(appName: string, port: number): Promise<LogWriteResult> {
+    return await this.logEvent('tunnel_closed', {
       app: appName,
       port,
       details: { success: true }
@@ -120,8 +136,13 @@ export class Logger {
   /**
    * Log error
    */
-  async logError(message: string, appName?: string, port?: number, details?: Record<string, any>): Promise<void> {
-    await this.logEvent('error', {
+  async logError(
+    message: string,
+    appName?: string,
+    port?: number,
+    details?: Record<string, unknown>
+  ): Promise<LogWriteResult> {
+    return await this.logEvent('error', {
       app: appName,
       port,
       message,

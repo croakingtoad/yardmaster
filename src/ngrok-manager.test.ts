@@ -6,8 +6,12 @@
  * to be set and will hit ngrok's API — skip them in CI without the token.
  */
 
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Logger } from './logger.js';
 import { NgrokManager, type NgrokSdk } from './ngrok-manager.js';
 import type { Config } from './types/index.js';
 
@@ -20,29 +24,45 @@ function makeConfig(authToken = 'dummy-token'): Config {
   };
 }
 
+let tmpDir: string;
+let activityLogger: Logger;
+
+beforeEach(async () => {
+  tmpDir = await mkdtemp(join(tmpdir(), 'yardmaster-ngrok-test-'));
+  activityLogger = new Logger(join(tmpDir, 'logs', 'activity.log'));
+});
+
+afterEach(async () => {
+  await rm(tmpDir, { recursive: true, force: true });
+});
+
+function makeManager(config: Config, sdk?: NgrokSdk): NgrokManager {
+  return new NgrokManager(config, sdk, activityLogger);
+}
+
 // ---------------------------------------------------------------------------
 // Pure state-management (no network required)
 // ---------------------------------------------------------------------------
 
 describe('NgrokManager — state management (no network)', () => {
   it('starts with no active tunnels', () => {
-    const mgr = new NgrokManager(makeConfig());
+    const mgr = makeManager(makeConfig());
     assert.strictEqual(mgr.getTunnelCount(), 0);
     assert.deepStrictEqual(mgr.listActiveTunnels(), []);
   });
 
   it('hasTunnel returns false for unknown app', () => {
-    const mgr = new NgrokManager(makeConfig());
+    const mgr = makeManager(makeConfig());
     assert.strictEqual(mgr.hasTunnel('ghost'), false);
   });
 
   it('getTunnelUrl returns null for unknown app', () => {
-    const mgr = new NgrokManager(makeConfig());
+    const mgr = makeManager(makeConfig());
     assert.strictEqual(mgr.getTunnelUrl('nobody'), null);
   });
 
   it('closeTunnel does not throw when tunnel does not exist', async () => {
-    const mgr = new NgrokManager(makeConfig());
+    const mgr = makeManager(makeConfig());
     await assert.doesNotReject(
       async () => await mgr.closeTunnel('nonexistent'),
       'closeTunnel should be a no-op when tunnel is absent'
@@ -50,12 +70,12 @@ describe('NgrokManager — state management (no network)', () => {
   });
 
   it('shutdown resolves cleanly when no tunnels are active', async () => {
-    const mgr = new NgrokManager(makeConfig());
+    const mgr = makeManager(makeConfig());
     await assert.doesNotReject(async () => await mgr.shutdown());
   });
 
   it('initialize throws a descriptive error when auth token is missing', async () => {
-    const mgr = new NgrokManager(makeConfig(''));
+    const mgr = makeManager(makeConfig(''));
     await assert.rejects(
       async () => await mgr.initialize(),
       /ngrok auth token is required to create tunnels/
@@ -72,7 +92,7 @@ describe('NgrokManager — state management (no network)', () => {
         throw new Error('forward should not be called by initialize()');
       }
     };
-    const mgr = new NgrokManager(makeConfig(), sdk);
+    const mgr = makeManager(makeConfig(), sdk);
 
     await mgr.initialize();
     await mgr.initialize();
@@ -92,7 +112,7 @@ describe('NgrokManager — constructor config paths', () => {
     cfg.ngrok.basic_auth = 'user:pass';
     cfg.ngrok.ip_allow = ['10.0.0.0/8'];
     cfg.ngrok.ip_deny = ['203.0.113.0/24'];
-    assert.doesNotThrow(() => new NgrokManager(cfg));
+    assert.doesNotThrow(() => makeManager(cfg));
   });
 });
 
@@ -128,7 +148,7 @@ describe('NgrokManager — integration (real ngrok)', () => {
     'createTunnel returns a public HTTPS URL',
     { skip: INTEGRATION_SKIP_REASON },
     async () => {
-      const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
+      const mgr = makeManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
       const url = await mgr.createTunnel(4000, 'int-test-app');
       assert.ok(url.startsWith('https://'), `Expected HTTPS URL, got: ${url}`);
       assert.strictEqual(mgr.hasTunnel('int-test-app'), true);
@@ -142,7 +162,7 @@ describe('NgrokManager — integration (real ngrok)', () => {
     'createTunnel returns existing URL without creating a new tunnel',
     { skip: INTEGRATION_SKIP_REASON },
     async () => {
-      const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
+      const mgr = makeManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
       const url1 = await mgr.createTunnel(4000, 'dedup-app');
       const url2 = await mgr.createTunnel(4000, 'dedup-app');
       assert.strictEqual(url1, url2);
@@ -155,7 +175,7 @@ describe('NgrokManager — integration (real ngrok)', () => {
     'closeTunnel removes the tunnel and decrements count',
     { skip: INTEGRATION_SKIP_REASON },
     async () => {
-      const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
+      const mgr = makeManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
       await mgr.createTunnel(4000, 'close-me');
       assert.strictEqual(mgr.getTunnelCount(), 1);
       await mgr.closeTunnel('close-me');
@@ -168,7 +188,7 @@ describe('NgrokManager — integration (real ngrok)', () => {
     'shutdown closes all active tunnels',
     { skip: INTEGRATION_SKIP_REASON },
     async () => {
-      const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
+      const mgr = makeManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
       await mgr.createTunnel(4001, 'app-1');
       await mgr.createTunnel(4002, 'app-2');
       assert.strictEqual(mgr.getTunnelCount(), 2);
@@ -181,7 +201,7 @@ describe('NgrokManager — integration (real ngrok)', () => {
     'initialize throws a descriptive error for an invalid auth token',
     { skip: INTEGRATION_SKIP_REASON },
     async () => {
-      const mgr = new NgrokManager(makeConfig('invalid-token-xyz'));
+      const mgr = makeManager(makeConfig('invalid-token-xyz'));
       await assert.rejects(
         async () => await mgr.initialize(),
         /Failed to initialize ngrok/

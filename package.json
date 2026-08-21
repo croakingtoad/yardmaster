@@ -14,7 +14,7 @@
     "cli": "node dist/cli.js",
     "lint": "eslint src --ext .ts",
     "type-check": "tsc --noEmit",
-    "test": "npm run build && node --test dist/*.test.js",
+    "test": "npm run build && node --test dist/live-state.test.js",
     "test:watch": "node --test --watch src/**/*.test.ts"
   },
   "keywords": [

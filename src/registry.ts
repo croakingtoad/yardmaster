@@ -8,7 +8,7 @@ import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname } from 'path';
 import * as lockfile from 'proper-lockfile';
-import { logger } from './logger.js';
+import { logger as defaultLogger, type Logger } from './logger.js';
 import type {
   PortRegistration,
   RegistryData,
@@ -102,9 +102,11 @@ export class PortRegistry {
   private registryPath: string;
   private data: RegistryData;
   private config: Config;
+  private activityLogger: Logger;
 
-  constructor(config: Config) {
+  constructor(config: Config, activityLogger: Logger = defaultLogger) {
     this.config = config;
+    this.activityLogger = activityLogger;
     // Expand ~ to home directory
     this.registryPath = config.registry.path.replace('~', homedir());
     this.data = {
@@ -238,7 +240,7 @@ export class PortRegistry {
     });
 
     if (result.success) {
-      await logger.logRegister(appName, result.port);
+      await this.activityLogger.logRegister(appName, result.port);
     }
 
     return result;
@@ -261,7 +263,7 @@ export class PortRegistry {
     });
 
     if (port !== null) {
-      await logger.logTunnelCreated(appName, port, ngrokUrl);
+      await this.activityLogger.logTunnelCreated(appName, port, ngrokUrl);
     }
   }
 
@@ -315,7 +317,7 @@ export class PortRegistry {
     });
 
     if (result.success) {
-      await logger.logRelease(appName, result.port);
+      await this.activityLogger.logRelease(appName, result.port);
     }
 
     return result;

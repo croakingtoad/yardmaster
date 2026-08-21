@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"syscall"
 	"time"
 )
 
@@ -20,8 +19,15 @@ func NewWriter(registryPath string) *Writer {
 	}
 }
 
-// Write writes the registry data to file with exclusive locking
+// Write writes the registry data while holding the cross-language registry lock.
 func (w *Writer) Write(data *RegistryData) error {
+	return withRegistryLock(w.registryPath, func() error {
+		return w.writeLocked(data)
+	})
+}
+
+// writeLocked writes registry data while the caller holds the registry lock.
+func (w *Writer) writeLocked(data *RegistryData) error {
 	// Update last modified time
 	data.LastUpdated = time.Now()
 
@@ -37,12 +43,6 @@ func (w *Writer) Write(data *RegistryData) error {
 		return fmt.Errorf("failed to open registry for writing: %w", err)
 	}
 	defer file.Close()
-
-	// Acquire exclusive lock for writing (LOCK_EX)
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("failed to acquire write lock: %w", err)
-	}
-	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 
 	// Truncate file before writing
 	if err := file.Truncate(0); err != nil {
@@ -69,26 +69,23 @@ func (w *Writer) Write(data *RegistryData) error {
 
 // UpdatePortSecurity updates security settings for a specific port
 func (w *Writer) UpdatePortSecurity(portNum int, security *SecurityInfo) error {
-	// Read current registry
-	reader := &Reader{registryPath: w.registryPath}
-	registry, err := reader.Read()
-	if err != nil {
-		return fmt.Errorf("failed to read registry: %w", err)
-	}
+	return withRegistryLock(w.registryPath, func() error {
+		reader := &Reader{registryPath: w.registryPath}
+		registry, err := reader.readLocked()
+		if err != nil {
+			return fmt.Errorf("failed to read registry: %w", err)
+		}
 
-	// Registry is keyed by port number as string
-	portKey := fmt.Sprintf("%d", portNum)
+		// Registry is keyed by port number as string.
+		portKey := fmt.Sprintf("%d", portNum)
+		port, exists := registry.Ports[portKey]
+		if !exists {
+			return fmt.Errorf("port %d not found in registry", portNum)
+		}
 
-	// Find and update port
-	port, exists := registry.Ports[portKey]
-	if !exists {
-		return fmt.Errorf("port %d not found in registry", portNum)
-	}
+		port.Security = security
+		registry.Ports[portKey] = port
 
-	// Update security info
-	port.Security = security
-	registry.Ports[portKey] = port
-
-	// Write back
-	return w.Write(registry)
+		return w.writeLocked(registry)
+	})
 }

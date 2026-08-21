@@ -3,9 +3,9 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -27,8 +27,27 @@ func NewReader() (*Reader, error) {
 	}, nil
 }
 
-// Read reads and parses the registry file with file locking
+// Read reads and parses the registry while holding the cross-language lock.
 func (r *Reader) Read() (*RegistryData, error) {
+	if _, err := os.Stat(filepath.Dir(r.registryPath)); os.IsNotExist(err) {
+		return &RegistryData{
+			Ports:       make(map[string]PortRegistration),
+			Version:     "1.0.0",
+			LastUpdated: time.Now(),
+		}, nil
+	}
+
+	var registry *RegistryData
+	err := withRegistryLock(r.registryPath, func() error {
+		var err error
+		registry, err = r.readLocked()
+		return err
+	})
+	return registry, err
+}
+
+// readLocked reads registry data while the caller holds the registry lock.
+func (r *Reader) readLocked() (*RegistryData, error) {
 	// Open file for reading
 	file, err := os.Open(r.registryPath)
 	if err != nil {
@@ -44,14 +63,8 @@ func (r *Reader) Read() (*RegistryData, error) {
 	}
 	defer file.Close()
 
-	// Acquire shared lock for reading (LOCK_SH)
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH); err != nil {
-		return nil, fmt.Errorf("failed to acquire read lock: %w", err)
-	}
-	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-
 	// Read file content
-	data, err := os.ReadFile(r.registryPath)
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read registry: %w", err)
 	}

@@ -11,7 +11,7 @@ import (
 func TestReader_Read_EmptyRegistry(t *testing.T) {
 	// Create temp directory
 	tmpDir := t.TempDir()
-	registryPath := filepath.Join(tmpDir, "registry.json")
+	registryPath := filepath.Join(tmpDir, "missing", "registry.json")
 
 	reader := &Reader{registryPath: registryPath}
 
@@ -97,6 +97,43 @@ func TestReader_Read_InvalidJSON(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("Expected error for invalid JSON, got nil")
+	}
+}
+
+func TestReader_Read_RespectsForeignLock(t *testing.T) {
+	tmpDir := t.TempDir()
+	registryPath := filepath.Join(tmpDir, "registry.json")
+	lockPath := registryPath + ".lock"
+	initial := []byte(`{"ports":{},"version":"1.0.0"}`)
+	if err := os.WriteFile(registryPath, initial, 0o644); err != nil {
+		t.Fatalf("write initial registry: %v", err)
+	}
+	if err := os.Mkdir(lockPath, 0o755); err != nil {
+		t.Fatalf("create foreign lock: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&Reader{registryPath: registryPath}).Read()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("read completed while foreign lock was held: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatalf("release foreign lock: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("read after foreign lock release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("read did not complete after foreign lock was released")
 	}
 }
 

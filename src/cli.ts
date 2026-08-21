@@ -6,9 +6,22 @@
  */
 
 import { Command } from 'commander';
+import { randomUUID } from 'node:crypto';
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile
+} from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { loadConfig } from './config.js';
 import { PortRegistry } from './registry.js';
 import { NgrokManager } from './ngrok-manager.js';
+import { validateBasicAuth, validateCIDRList } from './validation.js';
 import type { LogWriteResult } from './logger.js';
 import type { Config } from './types/index.js';
 
@@ -25,6 +38,151 @@ const DISPLAY_SAFE_CONFIG_FIELDS = new Set([
   'server.version',
   'server.description'
 ]);
+const EDITABLE_CONFIG_KEYS = [
+  'ngrok.domain',
+  'ngrok.basic_auth',
+  'ngrok.ip_allow',
+  'ngrok.ip_deny'
+] as const;
+
+type EditableConfigKey = typeof EDITABLE_CONFIG_KEYS[number];
+type JsonObject = Record<string, unknown>;
+
+function isEditableConfigKey(key: string): key is EditableConfigKey {
+  return (EDITABLE_CONFIG_KEYS as readonly string[]).includes(key);
+}
+
+function requireEditableConfigKey(key: string): EditableConfigKey {
+  if (!isEditableConfigKey(key)) {
+    throw new Error(
+      `Unsupported config key "${key}". Allowed keys: ${EDITABLE_CONFIG_KEYS.join(', ')}`
+    );
+  }
+  return key;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateConfigValue(
+  key: EditableConfigKey,
+  value: string
+): string | string[] {
+  switch (key) {
+    case 'ngrok.domain':
+      return value;
+    case 'ngrok.basic_auth': {
+      const validation = validateBasicAuth(value);
+      if (!validation.valid) {
+        throw new Error(validation.error);
+      }
+      return value;
+    }
+    case 'ngrok.ip_allow':
+    case 'ngrok.ip_deny': {
+      const validation = validateCIDRList(value);
+      if (!validation.valid || validation.errors.length > 0) {
+        throw new Error(validation.errors.join(', '));
+      }
+      return validation.cidrs;
+    }
+  }
+}
+
+async function readUserConfig(path: string): Promise<JsonObject> {
+  let content: string;
+  try {
+    content = await readFile(path, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return {};
+    }
+    throw error;
+  }
+
+  const parsed: unknown = JSON.parse(content);
+  if (!isJsonObject(parsed)) {
+    throw new Error('User config must contain a JSON object');
+  }
+  return parsed;
+}
+
+function updateNgrokSetting(
+  config: JsonObject,
+  key: EditableConfigKey,
+  value: string | string[] | undefined
+): JsonObject {
+  const updatedConfig = { ...config };
+  const existingNgrok = updatedConfig.ngrok;
+  if (existingNgrok !== undefined && !isJsonObject(existingNgrok)) {
+    throw new Error('User config field "ngrok" must contain a JSON object');
+  }
+
+  const ngrok = existingNgrok === undefined ? {} : { ...existingNgrok };
+  const property = key.slice('ngrok.'.length);
+  if (value === undefined) {
+    delete ngrok[property];
+  } else {
+    ngrok[property] = value;
+  }
+  updatedConfig.ngrok = ngrok;
+  return updatedConfig;
+}
+
+async function secureExistingConfig(path: string): Promise<void> {
+  try {
+    const metadata = await stat(path);
+    if ((metadata.mode & 0o177) !== 0) {
+      await chmod(path, 0o600);
+      console.error(`Warning: tightened ${path} permissions to 0600`);
+    }
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+      throw error;
+    }
+  }
+}
+
+async function writeUserConfig(config: JsonObject): Promise<void> {
+  const directory = join(homedir(), '.yardmaster');
+  const path = join(directory, 'config.json');
+  const temporaryPath = join(
+    directory,
+    `.config.json.${process.pid}.${randomUUID()}.tmp`
+  );
+
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await secureExistingConfig(path);
+
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(config, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600
+    });
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, path);
+    await chmod(path, 0o600);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
+async function setUserConfig(keyArgument: string, value: string): Promise<void> {
+  const key = requireEditableConfigKey(keyArgument);
+  const validatedValue = validateConfigValue(key, value);
+  const path = join(homedir(), '.yardmaster', 'config.json');
+  const config = await readUserConfig(path);
+  await writeUserConfig(updateNgrokSetting(config, key, validatedValue));
+}
+
+async function unsetUserConfig(keyArgument: string): Promise<void> {
+  const key = requireEditableConfigKey(keyArgument);
+  const path = join(homedir(), '.yardmaster', 'config.json');
+  const config = await readUserConfig(path);
+  await writeUserConfig(updateNgrokSetting(config, key, undefined));
+}
 
 function reportDegradedActivityLog(
   ...results: Array<LogWriteResult | null | undefined>
@@ -258,7 +416,7 @@ program
 /**
  * Show configuration
  */
-program
+const configCommand = program
   .command('config')
   .description('Show current configuration')
   .action(async () => {
@@ -268,6 +426,35 @@ program
       console.log('\n⚙️  Yardmaster Configuration\n');
       console.log(JSON.stringify(redactConfig(config), null, 2));
       console.log();
+    } catch (error) {
+      console.error('Error:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+configCommand
+  .command('set')
+  .description('Set an editable configuration value')
+  .argument('<key>', 'Configuration key')
+  .argument('<value>', 'Configuration value')
+  .action(async (key: string, value: string) => {
+    try {
+      await setUserConfig(key, value);
+      console.log(`${key}: set`);
+    } catch (error) {
+      console.error('Error:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+configCommand
+  .command('unset')
+  .description('Unset an editable configuration value')
+  .argument('<key>', 'Configuration key')
+  .action(async (key: string) => {
+    try {
+      await unsetUserConfig(key);
+      console.log(`${key}: unset`);
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : error);
       process.exit(1);

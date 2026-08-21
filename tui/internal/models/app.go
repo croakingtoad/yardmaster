@@ -21,9 +21,10 @@ const (
 	ViewNewPort
 	ViewMenu
 	ViewAbout
-	ViewExport   // Export Registry feature
-	ViewSettings // Configuration feature
-	ViewLogs     // View Logs feature
+	ViewExport       // Export Registry feature
+	ViewSettings     // Configuration feature
+	ViewLogs         // View Logs feature
+	ViewEditSecurity // Edit Security feature
 )
 
 type tickMsg time.Time
@@ -71,6 +72,14 @@ type Model struct {
 	LogFilterInput string
 	LogReader      interface{} // Will be *logs.Reader but avoid import cycle
 	LogWatcher     *fsnotify.Watcher
+
+	// Security Editor State
+	SecurityEditAppName      string // App being edited (for display)
+	SecurityEditPort         int    // Port number (used as registry key)
+	SecurityEditCursor       int    // Current field (0=BasicAuth, 1=IPRestrictions, 2=CustomDomain)
+	SecurityEditBasicAuth    bool
+	SecurityEditIPRestrict   bool
+	SecurityEditCustomDomain bool
 
 	// Reader
 	Reader  *registry.Reader
@@ -327,6 +336,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.SettingsCursor > 0 {
 					m.SettingsCursor--
 				}
+			} else if m.CurrentView == ViewEditSecurity {
+				// Navigate security options (0=BasicAuth, 1=IPRestrict, 2=CustomDomain)
+				if m.SecurityEditCursor > 0 {
+					m.SecurityEditCursor--
+				}
 			} else if m.CurrentView == ViewExport && !m.ExportFilenameEdit {
 				// Navigate export format selection
 				if m.ExportFormatIndex > 0 {
@@ -356,6 +370,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Navigate settings (0-4: PageSize, Theme, Timestamps, Refresh, Save)
 				if m.SettingsCursor < 4 {
 					m.SettingsCursor++
+				}
+			} else if m.CurrentView == ViewEditSecurity {
+				// Navigate security options (0=BasicAuth, 1=IPRestrict, 2=CustomDomain)
+				if m.SecurityEditCursor < 2 {
+					m.SecurityEditCursor++
 				}
 			} else if m.CurrentView == ViewExport && !m.ExportFilenameEdit {
 				// Navigate export format selection
@@ -399,6 +418,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.MenuOpen {
 				// Handle menu selection
 				return m.HandleMenuSelection()
+			} else if m.CurrentView == ViewEditSecurity {
+				// Toggle the current security option
+				return m.ToggleSecurityOption()
 			} else if m.CurrentView == ViewSettings {
 				// Save settings
 				if m.SettingsCursor == 4 {
@@ -424,8 +446,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "e":
 			// Edit key in detail view
 			if m.CurrentView == ViewDetail {
-				m.Message = "Edit Security - Coming in Phase 2"
+				port := m.GetSelectedPort()
+				if port != nil {
+					// Launch security editor for this port
+					m.SecurityEditAppName = port.AppName
+					m.SecurityEditPort = port.Port
+					m.SecurityEditCursor = 0
+
+					// Load current security settings (or defaults if none)
+					if port.Security != nil {
+						m.SecurityEditBasicAuth = port.Security.BasicAuth
+						m.SecurityEditIPRestrict = port.Security.IPRestrictions
+						m.SecurityEditCustomDomain = port.Security.CustomDomain
+					} else {
+						m.SecurityEditBasicAuth = false
+						m.SecurityEditIPRestrict = false
+						m.SecurityEditCustomDomain = false
+					}
+
+					m.CurrentView = ViewEditSecurity
+					m.Message = ""
+				}
 				return m, nil
+			}
+
+		case " ": // Space key
+			if m.CurrentView == ViewEditSecurity {
+				// Toggle the current security option
+				return m.ToggleSecurityOption()
 			}
 
 		case "d":
@@ -491,7 +539,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case "s":
+			if m.CurrentView == ViewEditSecurity {
+				// Save security settings
+				return m.SaveSecuritySettings()
+			}
+
 		case "esc":
+			if m.CurrentView == ViewEditSecurity {
+				// Cancel security editor
+				m.CurrentView = ViewList
+				m.Message = "Security edit canceled"
+				return m, nil
+			}
 			if m.CurrentView == ViewSettings {
 				// Cancel settings - restore original config
 				if m.OriginalConfig != nil {
@@ -601,8 +661,40 @@ func (m *Model) HandleMenuSelection() (*Model, tea.Cmd) {
 		return m.ReleaseSelectedPort()
 
 	case 2: // Edit Security
-		m.Message = "Edit Security - Coming in Phase 2"
 		m.MenuOpen = false
+		// Check if a port is selected
+		if m.Cursor < 0 || m.Cursor >= len(m.GetPagedPorts()) {
+			m.Message = "Please select a port first"
+			return m, nil
+		}
+
+		// Get the selected port
+		actualIndex := m.Page*m.PageSize + m.Cursor
+		if actualIndex >= len(m.Ports) {
+			m.Message = "Invalid port selection"
+			return m, nil
+		}
+
+		port := m.Ports[actualIndex]
+
+		// Initialize security editor state
+		m.SecurityEditAppName = port.AppName
+		m.SecurityEditPort = port.Port
+		m.SecurityEditCursor = 0
+
+		// Load current security settings (or defaults if none)
+		if port.Security != nil {
+			m.SecurityEditBasicAuth = port.Security.BasicAuth
+			m.SecurityEditIPRestrict = port.Security.IPRestrictions
+			m.SecurityEditCustomDomain = port.Security.CustomDomain
+		} else {
+			m.SecurityEditBasicAuth = false
+			m.SecurityEditIPRestrict = false
+			m.SecurityEditCustomDomain = false
+		}
+
+		m.CurrentView = ViewEditSecurity
+		m.Message = ""
 		return m, nil
 
 	case 3: // View Logs
@@ -965,6 +1057,51 @@ func refreshLogsCmd(m *Model) tea.Cmd {
 	return func() tea.Msg {
 		return loadLogsMsg{}
 	}
+}
+
+// ToggleSecurityOption toggles the current security option
+func (m *Model) ToggleSecurityOption() (*Model, tea.Cmd) {
+	switch m.SecurityEditCursor {
+	case 0: // BasicAuth
+		m.SecurityEditBasicAuth = !m.SecurityEditBasicAuth
+	case 1: // IP Restrictions
+		m.SecurityEditIPRestrict = !m.SecurityEditIPRestrict
+	case 2: // Custom Domain
+		m.SecurityEditCustomDomain = !m.SecurityEditCustomDomain
+	}
+	return m, nil
+}
+
+// SaveSecuritySettings saves the security settings to the registry
+func (m *Model) SaveSecuritySettings() (*Model, tea.Cmd) {
+	// Create writer
+	writer := registry.NewWriter(m.RegistryPath)
+
+	// Create security info struct
+	security := &registry.SecurityInfo{
+		BasicAuth:      m.SecurityEditBasicAuth,
+		IPRestrictions: m.SecurityEditIPRestrict,
+		CustomDomain:   m.SecurityEditCustomDomain,
+	}
+
+	// Update security in registry (use port number as key)
+	if err := writer.UpdatePortSecurity(m.SecurityEditPort, security); err != nil {
+		m.Error = fmt.Errorf("failed to save security: %w", err)
+		m.Message = ""
+		return m, nil
+	}
+
+	// Refresh data to show updated security
+	if err := m.RefreshData(); err != nil {
+		m.Error = err
+		m.Message = ""
+		return m, nil
+	}
+
+	m.CurrentView = ViewList
+	m.Message = fmt.Sprintf("Security updated for %s (port %d)", m.SecurityEditAppName, m.SecurityEditPort)
+	m.Error = nil
+	return m, nil
 }
 
 // View implements tea.Model - will be provided by ui package

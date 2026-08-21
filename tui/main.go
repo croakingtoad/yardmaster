@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/croakingtoad/yardmaster/tui/internal/models"
@@ -10,6 +12,39 @@ import (
 )
 
 func main() {
+	// Auto-relaunch with proper color support if needed
+	// Check if we need truecolor support and haven't already relaunched
+	if os.Getenv("COLORTERM") != "truecolor" && os.Getenv("YARDMASTER_COLOR_RELAUNCH") != "1" {
+		// Get the current executable path
+		exe, err := os.Executable()
+		if err != nil {
+			// If we can't get executable path, continue anyway
+			fmt.Fprintf(os.Stderr, "Warning: Could not detect executable path for color relaunch: %v\n", err)
+		} else {
+			// Re-execute with proper environment
+			cmd := exec.Command(exe, os.Args[1:]...)
+			cmd.Env = append(os.Environ(),
+				"COLORTERM=truecolor",
+				"TERM=xterm-256color",
+				"YARDMASTER_COLOR_RELAUNCH=1", // Prevent infinite loop
+			)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+
+			// Run and exit with the same code
+			if err := cmd.Run(); err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+						os.Exit(status.ExitStatus())
+					}
+				}
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+	}
+
 	model, err := models.NewModel()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing: %v\n", err)
@@ -81,6 +116,8 @@ func (a *appModel) View() string {
 		return ui.RenderSettingsView(a.Model)
 	case models.ViewLogs:
 		return ui.RenderLogsView(a.Model)
+	case models.ViewEditSecurity:
+		return ui.RenderEditSecurityView(a.Model)
 	default:
 		return ui.RenderListView(a.Model)
 	}

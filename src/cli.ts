@@ -9,8 +9,39 @@ import { Command } from 'commander';
 import { loadConfig } from './config.js';
 import { PortRegistry } from './registry.js';
 import { NgrokManager } from './ngrok-manager.js';
+import type { Config } from './types/index.js';
 
 const program = new Command();
+const SECRET_FIELD_NAME = /(?:auth|token|secret|password|passphrase|credential|api[_-]?key)/i;
+
+/**
+ * Replace values of secret-bearing configuration fields while retaining the
+ * surrounding structure needed to inspect a configuration safely.
+ */
+function redactSecrets(value: unknown, fieldName?: string): unknown {
+  if (fieldName && SECRET_FIELD_NAME.test(fieldName)) {
+    return value ? '(set)' : '(not set)';
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSecrets(item));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [
+        key,
+        redactSecrets(nestedValue, key)
+      ])
+    );
+  }
+
+  return value;
+}
+
+function redactConfig(config: Config): Config {
+  return redactSecrets(config) as Config;
+}
 
 program
   .name('yardmaster')
@@ -162,6 +193,7 @@ program
   .action(async () => {
     try {
       const config = await loadConfig();
+      const safeConfig = redactConfig(config);
       const registry = new PortRegistry(config);
       await registry.initialize();
 
@@ -169,11 +201,11 @@ program
 
       console.log('\n🚂 Yardmaster Status\n');
       console.log('─'.repeat(50));
-      console.log(`Port Range: ${config.port_range.start} - ${config.port_range.end}`);
-      console.log(`Registry Path: ${config.registry.path}`);
+      console.log(`Port Range: ${safeConfig.port_range.start} - ${safeConfig.port_range.end}`);
+      console.log(`Registry Path: ${safeConfig.registry.path}`);
       console.log(`Active Registrations: ${result.total}`);
-      console.log(`ngrok Region: ${config.ngrok.region}`);
-      console.log(`ngrok Auth Token: ${config.ngrok.auth_token ? `${config.ngrok.auth_token.substring(0, 8)}...` : '(not set)'}`);
+      console.log(`ngrok Region: ${safeConfig.ngrok.region}`);
+      console.log(`ngrok Auth Token: ${safeConfig.ngrok.auth_token}`);
       console.log('─'.repeat(50));
       console.log();
     } catch (error) {
@@ -193,7 +225,7 @@ program
       const config = await loadConfig();
 
       console.log('\n⚙️  Yardmaster Configuration\n');
-      console.log(JSON.stringify(config, null, 2));
+      console.log(JSON.stringify(redactConfig(config), null, 2));
       console.log();
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : error);

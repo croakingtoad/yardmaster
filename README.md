@@ -1,6 +1,6 @@
 # Yardmaster
 
-Automatic port allocation and ngrok tunnel management for AI agents via MCP protocol.
+Automatic port allocation with opt-in ngrok tunnel management for AI agents via MCP protocol.
 
 ## Table of Contents
 
@@ -36,7 +36,7 @@ Automatic port allocation and ngrok tunnel management for AI agents via MCP prot
 ## Prerequisites
 
 - Node.js 18 or later
-- ngrok account ([free tier available](https://dashboard.ngrok.com/signup))
+- ngrok account ([free tier available](https://dashboard.ngrok.com/signup), only needed for public tunnels)
 - Go 1.21 or later (optional, only for TUI)
 
 ## Installation
@@ -49,7 +49,7 @@ npm run build
 npm link  # Optional: makes 'yardmaster' command globally available
 ```
 
-Set your ngrok auth token:
+If you need a public tunnel, set your ngrok auth token:
 
 ```bash
 export NGROK_AUTH_TOKEN="your_token_here"
@@ -68,12 +68,14 @@ yardmaster status
 ### Register and use a port:
 
 ```bash
-yardmaster register myapp
+yardmaster register myapp --tunnel
 # Output: Port 3000 registered for 'myapp'
 #         ngrok URL: https://abc123.ngrok.app
 
 # Your app is now accessible at https://abc123.ngrok.app
 ```
+
+Without `--tunnel`, `yardmaster register myapp` reserves a local port only and does not require an ngrok token.
 
 ### Release when done:
 
@@ -92,7 +94,7 @@ yardmaster list
 ### Environment Variables
 
 ```bash
-# Required
+# Required only when using --tunnel or tunnel: true
 export NGROK_AUTH_TOKEN="your_token_here"
 
 # Optional - Security
@@ -134,10 +136,13 @@ Environment variables override config file settings.
 ### CLI Commands
 
 ```bash
-# Register a port (auto-assign from range)
+# Register a local port (auto-assign from range; no tunnel by default)
 yardmaster register <app_name>
 
-# Register specific port
+# Register a port and expose it publicly through ngrok
+yardmaster register <app_name> --tunnel
+
+# Register a specific local port
 yardmaster register <app_name> <port>
 
 # List all active ports
@@ -171,7 +176,7 @@ For AI agents like Claude, add to your MCP config (e.g., `claude_desktop_config.
 
 **Requirements:**
 - Use absolute paths, not relative
-- Include auth token in `env` or set globally
+- Include an auth token in `env` or set it globally only when calls use `tunnel: true`
 
 #### Available MCP Tools
 
@@ -239,7 +244,7 @@ Add this to `~/.claude/CLAUDE.md` to enable Yardmaster coordination for **all pr
 
 1. **Check** if yardmaster MCP is available (it should be)
 2. **Query** existing ports: `mcp.callTool('yardmaster', 'query_ports')`
-3. **Register** a port BEFORE starting server: `mcp.callTool('yardmaster', 'register_port', {app_name: 'project-name-component'})`
+3. **Register** a port BEFORE starting server: `mcp.callTool('yardmaster', 'register_port', {app_name: 'project-name-component', tunnel: true})`
 4. **Use** the returned port number in your server config
 5. **Share** the returned ngrok URL with user (public access)
 6. **Release** when done: `mcp.callTool('yardmaster', 'release_port', {app_name: 'project-name-component'})`
@@ -254,7 +259,7 @@ Add this to `~/.claude/CLAUDE.md` to enable Yardmaster coordination for **all pr
 ### Why This Matters
 
 - Prevents port conflicts across projects
-- Provides instant public URLs via ngrok
+- Provides public URLs via ngrok when `tunnel: true` is requested
 - Enables port coordination across multiple agents
 - Tracks what's running where
 - Automatic cleanup and port recycling
@@ -265,7 +270,8 @@ Add this to `~/.claude/CLAUDE.md` to enable Yardmaster coordination for **all pr
 \`\`\`javascript
 // 1. Register port first
 const result = await mcp.callTool('yardmaster', 'register_port', {
-  app_name: 'myproject-frontend'
+  app_name: 'myproject-frontend',
+  tunnel: true
 });
 // Returns: { port: 3024, ngrok_url: "https://abc123.ngrok.app" }
 
@@ -282,7 +288,8 @@ console.log("Frontend running at:", result.ngrok_url);
 #### Starting a Node/Express API:
 \`\`\`javascript
 const result = await mcp.callTool('yardmaster', 'register_port', {
-  app_name: 'myproject-api'
+  app_name: 'myproject-api',
+  tunnel: true
 });
 
 app.listen(result.port, () => {
@@ -357,7 +364,8 @@ Starting a React development server:
 ```javascript
 // 1. Register port
 const result = await mcp.callTool('yardmaster', 'register_port', {
-  app_name: 'frontend'
+  app_name: 'frontend',
+  tunnel: true
 });
 // Returns: { port: 3000, ngrok_url: "https://abc123.ngrok.app" }
 
@@ -484,7 +492,7 @@ The TUI displays actual security status per port.
 
 ### "Failed to initialize ngrok"
 
-**Cause:** Auth token not set or invalid
+**Cause:** A public tunnel was requested but the auth token is not set or is invalid
 
 **Solution:**
 1. Verify token: `echo $NGROK_AUTH_TOKEN`
@@ -517,7 +525,7 @@ The TUI displays actual security status per port.
 
 **Solution:**
 1. Use absolute path in MCP config (not relative)
-2. Verify `NGROK_AUTH_TOKEN` in `env` section or global environment
+2. If using `tunnel: true`, verify `NGROK_AUTH_TOKEN` in `env` or the global environment
 3. Test manually: `node /absolute/path/to/yardmaster/dist/index.js`
 4. Check MCP logs (location varies by client)
 5. Restart AI client
@@ -555,15 +563,9 @@ npm run build
 
 ### Testing
 
-**TypeScript Tests** (21 tests):
-- Input validation (basic auth, CIDR notation)
-- IPv4 and IPv6 validation
-- Edge case handling
+**TypeScript Tests** cover CLI behavior, configuration, registry operations, validation, and error handling.
 
-**Go Tests** (4 tests):
-- Registry file parsing
-- JSON error handling
-- Port filtering
+**Go Tests** cover TUI registry parsing, JSON error handling, and port filtering.
 
 Run tests:
 

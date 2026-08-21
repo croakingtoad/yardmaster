@@ -18,6 +18,11 @@ const (
 
 var errRegistryLocked = errors.New("registry lock is already held")
 
+var (
+	statAcquiredRegistryLock   = os.Stat
+	removeAcquiredRegistryLock = os.Remove
+)
+
 // Avoid synchronized Go callers exhausting identical retry schedules.
 // The directory lock remains the cross-process and cross-language authority.
 var registryProcessLocks sync.Map
@@ -109,10 +114,17 @@ func tryAcquireRegistryLock(lockPath string) (*registryLock, error) {
 }
 
 func newRegistryLock(lockPath string) (*registryLock, error) {
-	info, err := os.Stat(lockPath)
+	info, err := statAcquiredRegistryLock(lockPath)
 	if err != nil {
-		_ = os.Remove(lockPath)
-		return nil, fmt.Errorf("stat acquired registry lock: %w", err)
+		statErr := fmt.Errorf("stat acquired registry lock: %w", err)
+		cleanupErr := removeAcquiredRegistryLock(lockPath)
+		if cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+			return nil, errors.Join(
+				statErr,
+				fmt.Errorf("remove acquired registry lock after stat failure: %w", cleanupErr),
+			)
+		}
+		return nil, statErr
 	}
 
 	lock := &registryLock{

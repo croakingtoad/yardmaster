@@ -3,11 +3,11 @@
  * Zero Mock Policy: Real ngrok integration only, no mocks
  */
 
-import ngrok from '@ngrok/ngrok';
+import ngrok, { type Listener } from '@ngrok/ngrok';
 import { logger } from './logger.js';
 import type { Config, TunnelInfo } from './types/index.js';
 
-interface NgrokForwardOptions {
+export interface NgrokForwardOptions {
   addr: number;
   authtoken: string;
   metadata?: string;
@@ -21,18 +21,25 @@ interface ActiveTunnel {
   app_name: string;
   port: number;
   url: string;
-  listener: any; // ngrok listener object - SDK doesn't export this type
+  listener: Listener;
+}
+
+export interface NgrokSdk {
+  authtoken(authToken: string): Promise<void>;
+  forward(options: NgrokForwardOptions): Promise<Listener>;
 }
 
 export class NgrokManager {
   private config: Config;
   private tunnels: Map<string, ActiveTunnel>;
   private initialized: boolean;
+  private sdk: NgrokSdk;
 
-  constructor(config: Config) {
+  constructor(config: Config, sdk: NgrokSdk = ngrok) {
     this.config = config;
     this.tunnels = new Map();
     this.initialized = false;
+    this.sdk = sdk;
   }
 
   /**
@@ -51,7 +58,7 @@ export class NgrokManager {
 
     try {
       // Set auth token from config
-      await ngrok.authtoken(this.config.ngrok.auth_token);
+      await this.sdk.authtoken(this.config.ngrok.auth_token);
       this.initialized = true;
     } catch (error) {
       throw new Error(
@@ -103,7 +110,7 @@ export class NgrokManager {
         forwardOptions.ip_restriction_deny_cidrs = this.config.ngrok.ip_deny;
       }
 
-      const listener = await ngrok.forward(forwardOptions);
+      const listener = await this.sdk.forward(forwardOptions);
 
       // Get the public URL
       const url = listener.url() || '';

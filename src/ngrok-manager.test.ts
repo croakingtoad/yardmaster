@@ -8,7 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { NgrokManager } from './ngrok-manager.js';
+import { NgrokManager, type NgrokSdk } from './ngrok-manager.js';
 import type { Config } from './types/index.js';
 
 function makeConfig(authToken = 'dummy-token'): Config {
@@ -63,15 +63,21 @@ describe('NgrokManager — state management (no network)', () => {
   });
 
   it('initialize is idempotent — second call does nothing', async () => {
-    // initialize() tries to call ngrok.authtoken() which will fail with a
-    // dummy token, so we only call it once with a stub that overrides the
-    // internal flag to simulate a previously-initialized instance.
-    // This test verifies the guard branch is reachable without network I/O.
-    const mgr = new NgrokManager(makeConfig());
-    // Force initialized state by direct prototype manipulation (white-box):
-    (mgr as any).initialized = true;
-    // Second call must return immediately without throwing
-    await assert.doesNotReject(async () => await mgr.initialize());
+    let authTokenCalls = 0;
+    const sdk: NgrokSdk = {
+      async authtoken(): Promise<void> {
+        authTokenCalls += 1;
+      },
+      async forward(): Promise<never> {
+        throw new Error('forward should not be called by initialize()');
+      }
+    };
+    const mgr = new NgrokManager(makeConfig(), sdk);
+
+    await mgr.initialize();
+    await mgr.initialize();
+
+    assert.strictEqual(authTokenCalls, 1);
   });
 });
 
@@ -95,53 +101,91 @@ describe('NgrokManager — constructor config paths', () => {
 // Skip these in CI when token is absent by checking env var upfront.
 // ---------------------------------------------------------------------------
 
-const HAVE_TOKEN = !!process.env.NGROK_AUTH_TOKEN;
+const INTEGRATION_CASE_COUNT = 5;
+const HAVE_TOKEN = Boolean(process.env.NGROK_AUTH_TOKEN);
+const REQUIRE_INTEGRATION =
+  process.env.YARDMASTER_REQUIRE_NGROK_INTEGRATION === '1';
+const INTEGRATION_SKIP_REASON = HAVE_TOKEN
+  ? false
+  : 'NGROK integration NOT RUN: NGROK_AUTH_TOKEN is not set';
 
-describe('NgrokManager — integration (real ngrok)', { skip: !HAVE_TOKEN }, () => {
-  // NOTE: These tests create real ngrok tunnels and will consume quota.
-
-  it('createTunnel returns a public HTTPS URL', async () => {
-    const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
-    const url = await mgr.createTunnel(4000, 'int-test-app');
-    assert.ok(url.startsWith('https://'), `Expected HTTPS URL, got: ${url}`);
-    assert.strictEqual(mgr.hasTunnel('int-test-app'), true);
-    assert.strictEqual(mgr.getTunnelUrl('int-test-app'), url);
-    assert.strictEqual(mgr.getTunnelCount(), 1);
-    await mgr.closeTunnel('int-test-app');
-  });
-
-  it('createTunnel returns existing URL without creating a new tunnel', async () => {
-    const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
-    const url1 = await mgr.createTunnel(4000, 'dedup-app');
-    const url2 = await mgr.createTunnel(4000, 'dedup-app');
-    assert.strictEqual(url1, url2);
-    assert.strictEqual(mgr.getTunnelCount(), 1);
-    await mgr.closeTunnel('dedup-app');
-  });
-
-  it('closeTunnel removes the tunnel and decrements count', async () => {
-    const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
-    await mgr.createTunnel(4000, 'close-me');
-    assert.strictEqual(mgr.getTunnelCount(), 1);
-    await mgr.closeTunnel('close-me');
-    assert.strictEqual(mgr.getTunnelCount(), 0);
-    assert.strictEqual(mgr.hasTunnel('close-me'), false);
-  });
-
-  it('shutdown closes all active tunnels', async () => {
-    const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
-    await mgr.createTunnel(4001, 'app-1');
-    await mgr.createTunnel(4002, 'app-2');
-    assert.strictEqual(mgr.getTunnelCount(), 2);
-    await mgr.shutdown();
-    assert.strictEqual(mgr.getTunnelCount(), 0);
-  });
-
-  it('initialize throws a descriptive error for an invalid auth token', async () => {
-    const mgr = new NgrokManager(makeConfig('invalid-token-xyz'));
-    await assert.rejects(
-      async () => await mgr.initialize(),
-      /Failed to initialize ngrok/
+if (!HAVE_TOKEN && REQUIRE_INTEGRATION) {
+  it('requires ngrok integration credentials when explicitly requested', () => {
+    assert.fail(
+      'YARDMASTER_REQUIRE_NGROK_INTEGRATION=1, but NGROK_AUTH_TOKEN is not set'
     );
   });
+} else if (!HAVE_TOKEN) {
+  console.warn(
+    `WARNING: ngrok integration coverage DID NOT RUN: ${INTEGRATION_CASE_COUNT} cases skipped because NGROK_AUTH_TOKEN is not set`
+  );
+}
+
+describe('NgrokManager — integration (real ngrok)', () => {
+  // NOTE: These tests create real ngrok tunnels and will consume quota.
+
+  it(
+    'createTunnel returns a public HTTPS URL',
+    { skip: INTEGRATION_SKIP_REASON },
+    async () => {
+      const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
+      const url = await mgr.createTunnel(4000, 'int-test-app');
+      assert.ok(url.startsWith('https://'), `Expected HTTPS URL, got: ${url}`);
+      assert.strictEqual(mgr.hasTunnel('int-test-app'), true);
+      assert.strictEqual(mgr.getTunnelUrl('int-test-app'), url);
+      assert.strictEqual(mgr.getTunnelCount(), 1);
+      await mgr.closeTunnel('int-test-app');
+    }
+  );
+
+  it(
+    'createTunnel returns existing URL without creating a new tunnel',
+    { skip: INTEGRATION_SKIP_REASON },
+    async () => {
+      const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
+      const url1 = await mgr.createTunnel(4000, 'dedup-app');
+      const url2 = await mgr.createTunnel(4000, 'dedup-app');
+      assert.strictEqual(url1, url2);
+      assert.strictEqual(mgr.getTunnelCount(), 1);
+      await mgr.closeTunnel('dedup-app');
+    }
+  );
+
+  it(
+    'closeTunnel removes the tunnel and decrements count',
+    { skip: INTEGRATION_SKIP_REASON },
+    async () => {
+      const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
+      await mgr.createTunnel(4000, 'close-me');
+      assert.strictEqual(mgr.getTunnelCount(), 1);
+      await mgr.closeTunnel('close-me');
+      assert.strictEqual(mgr.getTunnelCount(), 0);
+      assert.strictEqual(mgr.hasTunnel('close-me'), false);
+    }
+  );
+
+  it(
+    'shutdown closes all active tunnels',
+    { skip: INTEGRATION_SKIP_REASON },
+    async () => {
+      const mgr = new NgrokManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
+      await mgr.createTunnel(4001, 'app-1');
+      await mgr.createTunnel(4002, 'app-2');
+      assert.strictEqual(mgr.getTunnelCount(), 2);
+      await mgr.shutdown();
+      assert.strictEqual(mgr.getTunnelCount(), 0);
+    }
+  );
+
+  it(
+    'initialize throws a descriptive error for an invalid auth token',
+    { skip: INTEGRATION_SKIP_REASON },
+    async () => {
+      const mgr = new NgrokManager(makeConfig('invalid-token-xyz'));
+      await assert.rejects(
+        async () => await mgr.initialize(),
+        /Failed to initialize ngrok/
+      );
+    }
+  );
 });

@@ -6,8 +6,10 @@
  * Zero Mock Policy: Real ngrok tunnels and file I/O
  */
 
+import { pathToFileURL } from 'url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema
@@ -15,11 +17,12 @@ import {
 import { loadConfig } from './config.js';
 import { PortRegistry } from './registry.js';
 import { NgrokManager } from './ngrok-manager.js';
+import type { Config } from './types/index.js';
 
 /**
  * Main MCP Server
  */
-class YardmasterServer {
+export class YardmasterServer {
   private server: Server;
   private registry?: PortRegistry;
   private ngrokManager?: NgrokManager;
@@ -383,23 +386,29 @@ class YardmasterServer {
   }
 
   /**
+   * Initialize registry and tunnel management for request handling
+   */
+  async initialize(config: Config): Promise<void> {
+    this.registry = new PortRegistry(config);
+    await this.registry.initialize();
+
+    this.ngrokManager = new NgrokManager(config);
+  }
+
+  /**
+   * Connect the MCP server to a transport
+   */
+  async connect(transport: Transport): Promise<void> {
+    await this.server.connect(transport);
+  }
+
+  /**
    * Start the server
    */
   async start(): Promise<void> {
     try {
-      // Load configuration
-      const config = await loadConfig();
-
-      // Initialize registry
-      this.registry = new PortRegistry(config);
-      await this.registry.initialize();
-
-      // Initialize ngrok manager
-      this.ngrokManager = new NgrokManager(config);
-
-      // Start MCP server with stdio transport
-      const transport = new StdioServerTransport();
-      await this.server.connect(transport);
+      await this.initialize(await loadConfig());
+      await this.connect(new StdioServerTransport());
 
       console.error('Yardmaster MCP server started');
     } catch (error) {
@@ -426,9 +435,10 @@ class YardmasterServer {
   }
 }
 
-// Start the server
-const server = new YardmasterServer();
-server.start().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const server = new YardmasterServer();
+  server.start().catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}

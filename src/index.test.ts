@@ -1,13 +1,8 @@
 /**
  * Tests for YardmasterServer (MCP server)
  *
- * Because the server wraps PortRegistry and NgrokManager, these tests exercise
- * handler logic by instantiating a real server in a temp registry directory.
- * NgrokManager is not actually called for tunnel operations (no real token
- * needed) — tests target the handler branching logic only.
- *
- * Integration tests that actually connect an MCP transport are out of scope
- * here and should live in a separate e2e suite.
+ * Registry behavior is tested directly where appropriate. Server orchestration
+ * behavior is exercised through a real in-memory MCP client/server transport.
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
@@ -15,17 +10,16 @@ import assert from 'node:assert';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { YardmasterServer } from './index.js';
 import { PortRegistry } from './registry.js';
 import type { Config } from './types/index.js';
 
-// We test handler logic via PortRegistry directly since YardmasterServer's
-// handlers are private. The integration surface is the registry + ngrok
-// interaction that the handlers orchestrate.
-
-function makeConfig(dir: string): Config {
+function makeConfig(dir: string, authToken = 'test-token'): Config {
   return {
     port_range: { start: 5100, end: 5120 },
-    ngrok: { auth_token: 'test-token', region: 'us' },
+    ngrok: { auth_token: authToken, region: 'us' },
     registry: { path: join(dir, 'registry.json') },
     server: { name: 'test', version: '1.0.0', description: '' }
   };
@@ -33,14 +27,52 @@ function makeConfig(dir: string): Config {
 
 let tmpDir: string;
 let registry: PortRegistry;
+let clients: Client[];
+
+async function connectClient(server: YardmasterServer): Promise<Client> {
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+
+  const client = new Client({ name: 'yardmaster-test', version: '1.0.0' });
+  await client.connect(clientTransport);
+  clients.push(client);
+  return client;
+}
+
+function getTextContent(result: unknown): string {
+  if (
+    typeof result !== 'object' ||
+    result === null ||
+    !('content' in result) ||
+    !Array.isArray(result.content)
+  ) {
+    throw new Error('Expected a tool response with content');
+  }
+
+  const content = result.content[0];
+  if (
+    typeof content !== 'object' ||
+    content === null ||
+    !('type' in content) ||
+    content.type !== 'text' ||
+    !('text' in content) ||
+    typeof content.text !== 'string'
+  ) {
+    throw new Error('Expected text tool response content');
+  }
+  return content.text;
+}
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'ym-server-test-'));
   registry = new PortRegistry(makeConfig(tmpDir));
   await registry.initialize();
+  clients = [];
 });
 
 afterEach(async () => {
+  await Promise.all(clients.map(async (client) => await client.close()));
   await rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -63,13 +95,31 @@ describe('register_port handler logic', () => {
   });
 
   it('rollback: port is freed when ngrok tunnel creation fails', async () => {
-    // Simulate: register succeeds, then tunnel fails → registry should release
-    const reg = await registry.registerPort('will-rollback', 5101);
-    assert.strictEqual(reg.success, true);
-    // Simulate the rollback that the handler performs on ngrok failure
-    await registry.releasePort('will-rollback');
-    // Port is now available again
-    assert.strictEqual(registry.isPortAvailable(5101), true);
+    const server = new YardmasterServer();
+    await server.initialize(makeConfig(tmpDir, ''));
+    const client = await connectClient(server);
+
+    const failedRegistration = await client.callTool({
+      name: 'register_port',
+      arguments: {
+        app_name: 'will-rollback',
+        desired_port: 5101,
+        tunnel: true
+      }
+    });
+    assert.strictEqual(failedRegistration.isError, true);
+    assert.match(
+      getTextContent(failedRegistration),
+      /ngrok auth token is required/
+    );
+
+    const query = await client.callTool({
+      name: 'query_ports',
+      arguments: { filter: 'will-rollback' }
+    });
+    assert.strictEqual(query.isError, undefined);
+    const queryResult = JSON.parse(getTextContent(query)) as { total: number };
+    assert.strictEqual(queryResult.total, 0);
   });
 });
 
@@ -147,14 +197,19 @@ describe('get_available_port handler logic', () => {
 // ---------------------------------------------------------------------------
 
 describe('YardmasterServer.ensureInitialized()', () => {
-  it('throws descriptive error when called before start()', () => {
-    // Test the error text that ensureInitialized() produces by simulating the
-    // guard condition: registry is undefined at construction time.
-    const msg = 'Yardmaster server not initialized. Call start() before handling requests.';
-    // This mirrors the guard in ensureInitialized()
-    function ensureInitialized(registry: any) {
-      if (!registry) throw new Error(msg);
-    }
-    assert.throws(() => ensureInitialized(undefined), { message: msg });
+  it('returns a descriptive error through MCP before initialization', async () => {
+    const server = new YardmasterServer();
+    const client = await connectClient(server);
+
+    const response = await client.callTool({
+      name: 'query_ports',
+      arguments: {}
+    });
+
+    assert.strictEqual(response.isError, true);
+    assert.strictEqual(
+      getTextContent(response),
+      'Error: Yardmaster server not initialized. Call start() before handling requests.'
+    );
   });
 });

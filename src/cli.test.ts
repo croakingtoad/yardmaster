@@ -4,6 +4,7 @@
 
 import './test-entrypoint.js';
 
+import { createHash } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -11,6 +12,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   stat,
   writeFile
@@ -49,20 +51,36 @@ function runCli(
   home: string,
   environment: Record<string, string> = {}
 ): Promise<CliResult> {
-  return new Promise((resolve, reject) => {
-    const childEnvironment: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: home,
-      NGROK_AUTH_TOKEN: knownToken
-    };
-    for (const variable of NGROK_ENVIRONMENT_VARIABLES) {
-      delete childEnvironment[variable];
-    }
-    Object.assign(childEnvironment, environment);
+  return runCommand(
+    process.execPath,
+    [cliPath, ...args],
+    createChildEnvironment(home, environment)
+  );
+}
 
-    const child = spawn(process.execPath, [cliPath, ...args], {
-      env: childEnvironment
-    });
+function createChildEnvironment(
+  home: string,
+  environment: Record<string, string> = {}
+): NodeJS.ProcessEnv {
+  const childEnvironment: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    NGROK_AUTH_TOKEN: knownToken
+  };
+  for (const variable of NGROK_ENVIRONMENT_VARIABLES) {
+    delete childEnvironment[variable];
+  }
+  Object.assign(childEnvironment, environment);
+  return childEnvironment;
+}
+
+function runCommand(
+  executable: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv
+): Promise<CliResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { env: environment });
     let stdout = '';
     let stderr = '';
 
@@ -79,6 +97,39 @@ function runCli(
   });
 }
 
+function runCliWithReadOnlyConfigDirectory(
+  args: string[],
+  home: string
+): Promise<CliResult> {
+  const directory = join(home, '.yardmaster');
+  const script = [
+    'directory=$1',
+    'node=$2',
+    'cli=$3',
+    'shift 3',
+    'mount --bind "$directory" "$directory"',
+    'mount -o remount,bind,ro "$directory"',
+    'exec "$node" "$cli" "$@"'
+  ].join(' && ');
+
+  return runCommand(
+    'unshare',
+    [
+      '-Ur',
+      '-m',
+      'sh',
+      '-c',
+      script,
+      'yardmaster-read-only-test',
+      directory,
+      process.execPath,
+      cliPath,
+      ...args
+    ],
+    createChildEnvironment(home)
+  );
+}
+
 async function createTemporaryHome(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
   tempDirectories.push(home);
@@ -87,6 +138,10 @@ async function createTemporaryHome(): Promise<string> {
 
 function configPath(home: string): string {
   return join(home, '.yardmaster', 'config.json');
+}
+
+function sha256(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 describe('CLI secret redaction', () => {
@@ -209,6 +264,30 @@ describe('CLI config writes', () => {
     await assert.rejects(readFile(configPath(home)), { code: 'ENOENT' });
   });
 
+  it('rejects hostile key variants without changing config bytes', async () => {
+    const home = await createTemporaryHome();
+    const directory = join(home, '.yardmaster');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(configPath(home), '{"ngrok":{"domain":"keep.ngrok.app"}}\n', {
+      mode: 0o600
+    });
+    const originalConfig = await readFile(configPath(home));
+    const hostileKeys = [
+      'NGROK.DOMAIN',
+      'ngrok.__proto__',
+      'constructor.prototype.x',
+      'ngrok.domain.unexpected'
+    ];
+
+    for (const key of hostileKeys) {
+      const result = await runCli(['config', 'set', key, 'not-allowed'], home);
+
+      assert.notStrictEqual(result.code, 0, key);
+      assert.match(result.stderr, /Unsupported config key/, key);
+      assert.deepStrictEqual(await readFile(configPath(home)), originalConfig, key);
+    }
+  });
+
   it('preserves unknown existing config fields across a write', async () => {
     const home = await createTemporaryHome();
     const directory = join(home, '.yardmaster');
@@ -247,6 +326,70 @@ describe('CLI config writes', () => {
     assert.strictEqual(result.code, 0, result.stderr);
     assert.strictEqual(metadata.mode & 0o777, 0o600);
     assert.match(result.stderr, /Warning:.*0600/);
+  });
+
+  for (const operation of ['set', 'unset'] as const) {
+    it(`enforces directory 0700 and file 0600 for config ${operation}`, async () => {
+      for (const initialState of ['missing', 'loose'] as const) {
+        const home = await createTemporaryHome();
+        const directory = join(home, '.yardmaster');
+        if (initialState === 'loose') {
+          await mkdir(directory, { recursive: true, mode: 0o700 });
+          await writeFile(configPath(home), JSON.stringify({
+            ngrok: { domain: 'existing.ngrok.app' }
+          }));
+          await chmod(configPath(home), 0o666);
+          await chmod(directory, 0o777);
+        }
+
+        const args = operation === 'set'
+          ? ['config', 'set', 'ngrok.domain', 'updated.ngrok.app']
+          : ['config', 'unset', 'ngrok.domain'];
+        const result = await runCli(args, home);
+        const [directoryMetadata, configMetadata] = await Promise.all([
+          stat(directory),
+          stat(configPath(home))
+        ]);
+
+        assert.strictEqual(result.code, 0, result.stderr);
+        assert.strictEqual(
+          directoryMetadata.mode & 0o777,
+          0o700,
+          `${operation} with ${initialState} directory`
+        );
+        assert.strictEqual(
+          configMetadata.mode & 0o777,
+          0o600,
+          `${operation} with ${initialState} directory`
+        );
+        if (initialState === 'loose') {
+          assert.match(result.stderr, /Warning: tightened .* permissions to 0700/);
+        }
+      }
+    });
+  }
+
+  it('preserves config and leaves no temp file when the directory is read-only', async () => {
+    const home = await createTemporaryHome();
+    const directory = join(home, '.yardmaster');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(configPath(home), '{"ngrok":{"domain":"keep.ngrok.app"}}\n', {
+      mode: 0o600
+    });
+    const originalHash = sha256(await readFile(configPath(home)));
+
+    const result = await runCliWithReadOnlyConfigDirectory(
+      ['config', 'set', 'ngrok.domain', 'must-not-persist.ngrok.app'],
+      home
+    );
+
+    assert.strictEqual(result.code, 1, result.stderr);
+    assert.match(result.stderr, /^Error:/m);
+    assert.strictEqual(sha256(await readFile(configPath(home))), originalHash);
+    const temporaryFiles = (await readdir(directory)).filter(
+      (file) => file.startsWith('.config.json.') && file.endsWith('.tmp')
+    );
+    assert.deepStrictEqual(temporaryFiles, []);
   });
 
   it('unsets a key by removing it while preserving sibling keys', async () => {

@@ -144,6 +144,16 @@ async function secureExistingConfig(path: string): Promise<void> {
   }
 }
 
+async function secureConfigDirectory(path: string): Promise<void> {
+  const metadata = await stat(path);
+  const needsWarning = (metadata.mode & 0o777) !== 0o700;
+
+  await chmod(path, 0o700);
+  if (needsWarning) {
+    console.error(`Warning: tightened ${path} permissions to 0700`);
+  }
+}
+
 async function writeUserConfig(config: JsonObject): Promise<void> {
   const directory = join(homedir(), '.yardmaster');
   const path = join(directory, 'config.json');
@@ -153,6 +163,7 @@ async function writeUserConfig(config: JsonObject): Promise<void> {
   );
 
   await mkdir(directory, { recursive: true, mode: 0o700 });
+  await secureConfigDirectory(directory);
   await secureExistingConfig(path);
 
   try {

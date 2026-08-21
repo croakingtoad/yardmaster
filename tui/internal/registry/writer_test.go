@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -78,10 +77,20 @@ func TestWriterWriteReclaimsStaleLock(t *testing.T) {
 func TestWriterWriteSerializesConcurrentWrites(t *testing.T) {
 	tmpDir := t.TempDir()
 	registryPath := filepath.Join(tmpDir, "registry.json")
+	lockPath := registryPath + ".lock"
+	initial := []byte(`{"ports":{},"version":"initial"}`)
+	if err := os.WriteFile(registryPath, initial, 0o644); err != nil {
+		t.Fatalf("write initial registry: %v", err)
+	}
+	if err := os.Mkdir(lockPath, 0o755); err != nil {
+		t.Fatalf("hold registry lock: %v", err)
+	}
+
 	const writeCount = 32
 	writer := NewWriter(registryPath)
 	start := make(chan struct{})
 	errs := make(chan error, writeCount)
+	completed := make(chan struct{}, writeCount)
 	var ready sync.WaitGroup
 	ready.Add(writeCount)
 	for i := 0; i < writeCount; i++ {
@@ -91,10 +100,38 @@ func TestWriterWriteSerializesConcurrentWrites(t *testing.T) {
 			data := emptyRegistry()
 			data.Version = fmt.Sprintf("write-%d", writeNumber)
 			errs <- writer.Write(data)
+			completed <- struct{}{}
 		}(i)
 	}
 	ready.Wait()
 	close(start)
+
+	prematureWrite := false
+	select {
+	case <-completed:
+		prematureWrite = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	if prematureWrite {
+		if err := os.Remove(lockPath); err != nil {
+			t.Fatalf("release registry lock after premature write: %v", err)
+		}
+		for i := 0; i < writeCount; i++ {
+			<-errs
+		}
+		t.Fatal("concurrent write completed while registry lock was held")
+	}
+	got, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("read registry while locked: %v", err)
+	}
+	if string(got) != string(initial) {
+		t.Fatalf("registry changed while lock was held: got %q", got)
+	}
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatalf("release registry lock: %v", err)
+	}
+
 	for i := 0; i < writeCount; i++ {
 		if err := <-errs; err != nil {
 			t.Fatalf("concurrent write: %v", err)
@@ -109,8 +146,8 @@ func TestWriterWriteSerializesConcurrentWrites(t *testing.T) {
 	if err := json.Unmarshal(encoded, &result); err != nil {
 		t.Fatalf("concurrent writes produced invalid JSON: %v", err)
 	}
-	if !strings.HasPrefix(result.Version, "write-") {
-		t.Errorf("final registry does not match a complete write: version %q", result.Version)
+	if result.Version == "initial" {
+		t.Error("registry was not updated after lock release")
 	}
 }
 

@@ -18,13 +18,12 @@ export interface LogEntry {
   details?: Record<string, any>;
 }
 
-class Logger {
+export class Logger {
   private logPath: string;
   private initialized: boolean;
 
-  constructor() {
-    // Log file at ~/.yardmaster/logs/activity.log
-    this.logPath = join(homedir(), '.yardmaster', 'logs', 'activity.log');
+  constructor(logPath = join(homedir(), '.yardmaster', 'logs', 'activity.log')) {
+    this.logPath = logPath;
     this.initialized = false;
   }
 

@@ -5,28 +5,27 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { readFile, unlink } from 'fs/promises';
+import { mkdtemp, readFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
-import { homedir } from 'os';
+import { tmpdir } from 'os';
 import { join, dirname } from 'path';
-import { logger } from './logger.js';
+import { Logger } from './logger.js';
 
 describe('Logger', () => {
-  const logPath = join(homedir(), '.yardmaster', 'logs', 'activity.log');
-  const logDir = dirname(logPath);
+  let tmpDir: string;
+  let logPath: string;
+  let logDir: string;
+  let logger: Logger;
 
-  // Clean up log file before each test
   beforeEach(async () => {
-    if (existsSync(logPath)) {
-      await unlink(logPath);
-    }
+    tmpDir = await mkdtemp(join(tmpdir(), 'yardmaster-logger-test-'));
+    logPath = join(tmpDir, 'logs', 'activity.log');
+    logDir = dirname(logPath);
+    logger = new Logger(logPath);
   });
 
-  // Clean up after tests
   afterEach(async () => {
-    if (existsSync(logPath)) {
-      await unlink(logPath);
-    }
+    await rm(tmpDir, { recursive: true, force: true });
   });
 
   it('should create log directory on first write', async () => {

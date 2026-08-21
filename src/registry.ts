@@ -18,6 +18,86 @@ import type {
   PortQueryResult
 } from './types/index.js';
 
+interface MutationResult<T> {
+  result: T;
+  changed: boolean;
+}
+
+function isErrnoException(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    error.code === code
+  );
+}
+
+function isPortRegistration(value: unknown, key: string): value is PortRegistration {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const monitorIsValid = !('monitor' in value) || typeof value.monitor === 'boolean';
+  const securityIsValid =
+    !('security' in value) ||
+    (typeof value.security === 'object' &&
+      value.security !== null &&
+      !Array.isArray(value.security) &&
+      'basic_auth' in value.security &&
+      typeof value.security.basic_auth === 'boolean' &&
+      'ip_restrictions' in value.security &&
+      typeof value.security.ip_restrictions === 'boolean' &&
+      'custom_domain' in value.security &&
+      typeof value.security.custom_domain === 'boolean');
+
+  return (
+    'app_name' in value &&
+    typeof value.app_name === 'string' &&
+    'port' in value &&
+    typeof value.port === 'number' &&
+    Number.isInteger(value.port) &&
+    value.port >= 1024 &&
+    value.port <= 65535 &&
+    String(value.port) === key &&
+    'ngrok_url' in value &&
+    (typeof value.ngrok_url === 'string' || value.ngrok_url === null) &&
+    'pid' in value &&
+    ((typeof value.pid === 'number' && Number.isInteger(value.pid)) ||
+      value.pid === null) &&
+    'registered_at' in value &&
+    typeof value.registered_at === 'string' &&
+    !Number.isNaN(Date.parse(value.registered_at)) &&
+    'status' in value &&
+    (value.status === 'active' || value.status === 'released') &&
+    monitorIsValid &&
+    securityIsValid
+  );
+}
+
+function isRegistryData(value: unknown): value is RegistryData {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    !('ports' in value) ||
+    typeof value.ports !== 'object' ||
+    value.ports === null ||
+    Array.isArray(value.ports) ||
+    !('version' in value) ||
+    typeof value.version !== 'string' ||
+    value.version.length === 0 ||
+    !('last_updated' in value) ||
+    typeof value.last_updated !== 'string' ||
+    Number.isNaN(Date.parse(value.last_updated))
+  ) {
+    return false;
+  }
+
+  return Object.entries(value.ports).every(([key, registration]) =>
+    isPortRegistration(registration, key)
+  );
+}
+
 export class PortRegistry {
   private registryPath: string;
   private data: RegistryData;
@@ -41,6 +121,10 @@ export class PortRegistry {
     try {
       await this.load();
     } catch (error) {
+      if (!isErrnoException(error, 'ENOENT')) {
+        throw error;
+      }
+
       // File doesn't exist, create new registry
       await this.ensureDirectory();
       await this.save();
@@ -58,157 +142,183 @@ export class PortRegistry {
     desiredPort?: number,
     monitor?: boolean
   ): Promise<PortRegistrationResult> {
-    // Check if app already registered
-    const existing = Object.values(this.data.ports).find(
-      (reg) => reg.app_name === appName && reg.status === 'active'
-    );
+    const result = await this.mutate((data) => {
+      const existing = Object.values(data.ports).find(
+        (reg) => reg.app_name === appName && reg.status === 'active'
+      );
 
-    if (existing) {
-      return {
-        success: false,
+      if (existing) {
+        return {
+          changed: false,
+          result: {
+            success: false,
+            app_name: appName,
+            port: existing.port,
+            ngrok_url: existing.ngrok_url || '',
+            message: `Application '${appName}' already registered on port ${existing.port}`
+          }
+        };
+      }
+
+      let port: number;
+      if (desiredPort) {
+        if (!this.isValidPort(desiredPort)) {
+          return {
+            changed: false,
+            result: {
+              success: false,
+              app_name: appName,
+              port: desiredPort,
+              ngrok_url: '',
+              message: `Invalid port ${desiredPort}. Must be between 1024-65535`
+            }
+          };
+        }
+
+        if (!this.isPortAvailableIn(data, desiredPort)) {
+          const occupant = data.ports[desiredPort];
+          return {
+            changed: false,
+            result: {
+              success: false,
+              app_name: appName,
+              port: desiredPort,
+              ngrok_url: '',
+              message: `Port ${desiredPort} already in use by '${occupant.app_name}'`
+            }
+          };
+        }
+
+        port = desiredPort;
+      } else {
+        const availablePort = this.getAvailablePortIn(data);
+        if (!availablePort) {
+          return {
+            changed: false,
+            result: {
+              success: false,
+              app_name: appName,
+              port: 0,
+              ngrok_url: '',
+              message: `No available ports in range ${this.config.port_range.start}-${this.config.port_range.end}`
+            }
+          };
+        }
+        port = availablePort;
+      }
+
+      const registration: PortRegistration = {
         app_name: appName,
-        port: existing.port,
-        ngrok_url: existing.ngrok_url || '',
-        message: `Application '${appName}' already registered on port ${existing.port}`
+        port,
+        ngrok_url: null,
+        pid: process.pid,
+        registered_at: new Date().toISOString(),
+        status: 'active',
+        monitor,
+        security: {
+          basic_auth: !!this.config.ngrok.basic_auth,
+          ip_restrictions: !!(
+            this.config.ngrok.ip_allow?.length || this.config.ngrok.ip_deny?.length
+          ),
+          custom_domain: !!this.config.ngrok.domain
+        }
       };
+
+      data.ports[port] = registration;
+      return {
+        changed: true,
+        result: {
+          success: true,
+          app_name: appName,
+          port,
+          ngrok_url: '',
+          message: `Port ${port} registered for '${appName}'`
+        }
+      };
+    });
+
+    if (result.success) {
+      await logger.logRegister(appName, result.port);
     }
 
-    // Determine port to use
-    let port: number;
-    if (desiredPort) {
-      // Validate desired port
-      if (!this.isValidPort(desiredPort)) {
-        return {
-          success: false,
-          app_name: appName,
-          port: desiredPort,
-          ngrok_url: '',
-          message: `Invalid port ${desiredPort}. Must be between 1024-65535`
-        };
-      }
-
-      // Check if port is available
-      if (!this.isPortAvailable(desiredPort)) {
-        const occupant = this.data.ports[desiredPort];
-        return {
-          success: false,
-          app_name: appName,
-          port: desiredPort,
-          ngrok_url: '',
-          message: `Port ${desiredPort} already in use by '${occupant.app_name}'`
-        };
-      }
-
-      port = desiredPort;
-    } else {
-      // Auto-assign port
-      const availablePort = this.getAvailablePort();
-      if (!availablePort) {
-        return {
-          success: false,
-          app_name: appName,
-          port: 0,
-          ngrok_url: '',
-          message: `No available ports in range ${this.config.port_range.start}-${this.config.port_range.end}`
-        };
-      }
-      port = availablePort;
-    }
-
-    // Create registration with security metadata
-    const registration: PortRegistration = {
-      app_name: appName,
-      port,
-      ngrok_url: null, // Will be set by ngrokManager
-      pid: process.pid,
-      registered_at: new Date().toISOString(),
-      status: 'active',
-      monitor,
-      security: {
-        basic_auth: !!this.config.ngrok.basic_auth,
-        ip_restrictions: !!(this.config.ngrok.ip_allow?.length || this.config.ngrok.ip_deny?.length),
-        custom_domain: !!this.config.ngrok.domain
-      }
-    };
-
-    this.data.ports[port] = registration;
-    this.data.last_updated = new Date().toISOString();
-    await this.save();
-
-    // Log registration event
-    await logger.logRegister(appName, port);
-
-    return {
-      success: true,
-      app_name: appName,
-      port,
-      ngrok_url: '',
-      message: `Port ${port} registered for '${appName}'`
-    };
+    return result;
   }
 
   /**
    * Update ngrok URL for a registered port
    */
   async updateNgrokUrl(appName: string, ngrokUrl: string): Promise<void> {
-    const registration = Object.values(this.data.ports).find(
-      (reg) => reg.app_name === appName && reg.status === 'active'
-    );
+    const port = await this.mutate((data) => {
+      const registration = Object.values(data.ports).find(
+        (reg) => reg.app_name === appName && reg.status === 'active'
+      );
+      if (!registration) {
+        return { changed: false, result: null };
+      }
 
-    if (registration) {
       registration.ngrok_url = ngrokUrl;
-      this.data.last_updated = new Date().toISOString();
-      await this.save();
+      return { changed: true, result: registration.port };
+    });
 
-      // Log tunnel URL update (this happens after tunnel creation)
-      await logger.logTunnelCreated(appName, registration.port, ngrokUrl);
+    if (port !== null) {
+      await logger.logTunnelCreated(appName, port, ngrokUrl);
     }
   }
 
   async setMonitor(appName: string, monitor: boolean): Promise<boolean> {
-    const registration = Object.values(this.data.ports).find(
-      (reg) => reg.app_name === appName && reg.status === 'active'
-    );
-    if (!registration) return false;
-    registration.monitor = monitor;
-    this.data.last_updated = new Date().toISOString();
-    await this.save();
-    return true;
+    return await this.mutate((data) => {
+      const registration = Object.values(data.ports).find(
+        (reg) => reg.app_name === appName && reg.status === 'active'
+      );
+      if (!registration) {
+        return { changed: false, result: false };
+      }
+
+      registration.monitor = monitor;
+      return { changed: true, result: true };
+    });
   }
 
   /**
    * Release a port registration
    */
   async releasePort(appName: string): Promise<PortReleaseResult> {
-    const registration = Object.values(this.data.ports).find(
-      (reg) => reg.app_name === appName && reg.status === 'active'
-    );
+    const result = await this.mutate((data) => {
+      const registration = Object.values(data.ports).find(
+        (reg) => reg.app_name === appName && reg.status === 'active'
+      );
 
-    if (!registration) {
+      if (!registration) {
+        return {
+          changed: false,
+          result: {
+            success: false,
+            app_name: appName,
+            port: 0,
+            message: `No active registration found for '${appName}'`
+          }
+        };
+      }
+
+      const port = registration.port;
+      registration.status = 'released';
+      registration.ngrok_url = null;
       return {
-        success: false,
-        app_name: appName,
-        port: 0,
-        message: `No active registration found for '${appName}'`
+        changed: true,
+        result: {
+          success: true,
+          app_name: appName,
+          port,
+          message: `Released port ${port} from '${appName}'`
+        }
       };
+    });
+
+    if (result.success) {
+      await logger.logRelease(appName, result.port);
     }
 
-    // Mark as released (keep in registry for history)
-    const port = registration.port;
-    registration.status = 'released';
-    registration.ngrok_url = null;
-    this.data.last_updated = new Date().toISOString();
-    await this.save();
-
-    // Log release event
-    await logger.logRelease(appName, port);
-
-    return {
-      success: true,
-      app_name: appName,
-      port,
-      message: `Released port ${port} from '${appName}'`
-    };
+    return result;
   }
 
   /**
@@ -240,11 +350,19 @@ export class PortRegistry {
    * Get next available port in configured range
    */
   getAvailablePort(rangeStart?: number, rangeEnd?: number): number | null {
+    return this.getAvailablePortIn(this.data, rangeStart, rangeEnd);
+  }
+
+  private getAvailablePortIn(
+    data: RegistryData,
+    rangeStart?: number,
+    rangeEnd?: number
+  ): number | null {
     const start = rangeStart || this.config.port_range.start;
     const end = rangeEnd || this.config.port_range.end;
 
     for (let port = start; port <= end; port++) {
-      if (this.isPortAvailable(port)) {
+      if (this.isPortAvailableIn(data, port)) {
         return port;
       }
     }
@@ -256,7 +374,11 @@ export class PortRegistry {
    * Check if a port is available
    */
   isPortAvailable(port: number): boolean {
-    const registration = this.data.ports[port];
+    return this.isPortAvailableIn(this.data, port);
+  }
+
+  private isPortAvailableIn(data: RegistryData, port: number): boolean {
+    const registration = data.ports[port];
     return !registration || registration.status === 'released';
   }
 
@@ -298,8 +420,48 @@ export class PortRegistry {
     });
 
     try {
-      const content = await readFile(this.registryPath, 'utf-8');
-      this.data = JSON.parse(content);
+      this.data = await this.readUnlocked();
+    } finally {
+      await release();
+    }
+  }
+
+  private async readUnlocked(): Promise<RegistryData> {
+    const content = await readFile(this.registryPath, 'utf8');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch (error) {
+      throw new Error(`Failed to parse registry '${this.registryPath}'`, {
+        cause: error
+      });
+    }
+
+    if (!isRegistryData(parsed)) {
+      throw new Error(
+        `Registry '${this.registryPath}' does not match the expected schema`
+      );
+    }
+    return parsed;
+  }
+
+  private async mutate<T>(
+    mutation: (data: RegistryData) => MutationResult<T>
+  ): Promise<T> {
+    await this.ensureRegistryFile();
+    const release = await lockfile.lock(this.registryPath, {
+      retries: { retries: 5, minTimeout: 100 }
+    });
+
+    try {
+      const data = await this.readUnlocked();
+      const outcome = mutation(data);
+      if (outcome.changed) {
+        data.last_updated = new Date().toISOString();
+        await this.writeUnlocked(data);
+      }
+      this.data = data;
+      return outcome.result;
     } finally {
       await release();
     }
@@ -309,19 +471,7 @@ export class PortRegistry {
    * Save registry to disk with atomic write and exclusive lock
    */
   private async save(): Promise<void> {
-    await this.ensureDirectory();
-
-    // proper-lockfile requires the target file to exist before locking;
-    // create it atomically on first save ('wx' fails if it already exists)
-    if (!existsSync(this.registryPath)) {
-      try {
-        await writeFile(this.registryPath, '{}', { flag: 'wx' });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-          throw error;
-        }
-      }
-    }
+    await this.ensureRegistryFile();
 
     // Acquire exclusive lock for writing
     const release = await lockfile.lock(this.registryPath, {
@@ -329,11 +479,34 @@ export class PortRegistry {
     });
 
     try {
-      const content = JSON.stringify(this.data, null, 2);
-      await writeFile(this.registryPath, content, 'utf-8');
+      const data = await this.readUnlocked();
+      await this.writeUnlocked(data);
+      this.data = data;
     } finally {
       await release();
     }
+  }
+
+  private async ensureRegistryFile(): Promise<void> {
+    await this.ensureDirectory();
+    if (existsSync(this.registryPath)) {
+      return;
+    }
+
+    try {
+      await writeFile(this.registryPath, JSON.stringify(this.data, null, 2), {
+        encoding: 'utf8',
+        flag: 'wx'
+      });
+    } catch (error) {
+      if (!isErrnoException(error, 'EEXIST')) {
+        throw error;
+      }
+    }
+  }
+
+  private async writeUnlocked(data: RegistryData): Promise<void> {
+    await writeFile(this.registryPath, JSON.stringify(data, null, 2), 'utf8');
   }
 
   /**

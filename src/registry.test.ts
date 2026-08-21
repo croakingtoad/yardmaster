@@ -5,11 +5,143 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { mkdtemp, rm } from 'fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 import { PortRegistry } from './registry.js';
-import type { Config } from './types/index.js';
+import type { Config, PortRegistrationResult } from './types/index.js';
+
+const REGISTRY_WORKER_SOURCE = `
+const { PortRegistry } = await import(process.env.YARDMASTER_REGISTRY_MODULE_URL);
+
+const config = JSON.parse(process.env.YARDMASTER_REGISTRY_CONFIG);
+const registry = new PortRegistry(config);
+
+try {
+  await registry.initialize();
+  process.send({ type: 'ready' });
+  process.once('message', async (message) => {
+    if (message !== 'start') return;
+    try {
+      const result = await registry.registerPort(
+        process.env.YARDMASTER_WORKER_APP,
+        Number(process.env.YARDMASTER_WORKER_PORT)
+      );
+      process.send({ type: 'result', result }, () => process.disconnect());
+    } catch (error) {
+      process.send(
+        { type: 'error', error: error instanceof Error ? error.message : String(error) },
+        () => process.disconnect()
+      );
+    }
+  });
+} catch (error) {
+  process.send(
+    { type: 'error', error: error instanceof Error ? error.message : String(error) },
+    () => process.disconnect()
+  );
+}
+`;
+
+interface RegistryWorker {
+  process: ChildProcess;
+  ready: Promise<void>;
+  result: Promise<PortRegistrationResult>;
+}
+
+function isPortRegistrationResult(value: unknown): value is PortRegistrationResult {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'success' in value &&
+    typeof value.success === 'boolean' &&
+    'app_name' in value &&
+    typeof value.app_name === 'string' &&
+    'port' in value &&
+    typeof value.port === 'number' &&
+    'ngrok_url' in value &&
+    typeof value.ngrok_url === 'string'
+  );
+}
+
+function startRegistryWorker(
+  workerConfig: Config,
+  appName: string,
+  port: number
+): RegistryWorker {
+  const child = spawn(
+    process.execPath,
+    ['--input-type=module', '--eval', REGISTRY_WORKER_SOURCE],
+    {
+      env: {
+        ...process.env,
+        YARDMASTER_REGISTRY_MODULE_URL: pathToFileURL(
+          join(process.cwd(), 'dist', 'registry.js')
+        ).href,
+        YARDMASTER_REGISTRY_CONFIG: JSON.stringify(workerConfig),
+        YARDMASTER_WORKER_APP: appName,
+        YARDMASTER_WORKER_PORT: String(port)
+      },
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc']
+    }
+  );
+
+  let stderr = '';
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
+  let resolveResult!: (result: PortRegistrationResult) => void;
+  let rejectResult!: (error: Error) => void;
+  const result = new Promise<PortRegistrationResult>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+
+  child.on('message', (message: unknown) => {
+    if (typeof message !== 'object' || message === null || !('type' in message)) {
+      return;
+    }
+    if (message.type === 'ready') {
+      resolveReady();
+    } else if (
+      message.type === 'result' &&
+      'result' in message &&
+      isPortRegistrationResult(message.result)
+    ) {
+      resolveResult(message.result);
+    } else if (message.type === 'error' && 'error' in message) {
+      const error = new Error(`registry worker failed: ${String(message.error)}`);
+      rejectReady(error);
+      rejectResult(error);
+    }
+  });
+
+  child.once('error', (error) => {
+    rejectReady(error);
+    rejectResult(error);
+  });
+  child.once('exit', (code, signal) => {
+    if (code === 0) return;
+    const error = new Error(
+      `registry worker exited with code ${code}, signal ${signal}: ${stderr}`
+    );
+    rejectReady(error);
+    rejectResult(error);
+  });
+
+  return { process: child, ready, result };
+}
 
 // Build a minimal config that points at an isolated temp directory
 function makeConfig(registryDir: string): Config {
@@ -57,6 +189,131 @@ describe('PortRegistry.initialize()', () => {
     const reg = registry2.getRegistrationByApp('preexisting');
     assert.ok(reg, 'Preexisting registration should survive re-init');
     assert.strictEqual(reg!.port, 4000);
+  });
+
+  for (const [name, invalidRegistry] of [
+    ['unparseable JSON', '{not-json'],
+    ['JSON with an invalid registry shape', '{}']
+  ]) {
+    it(`rejects ${name} without overwriting it`, async () => {
+      await writeFile(config.registry.path, invalidRegistry, 'utf8');
+      const freshRegistry = new PortRegistry(config);
+
+      await assert.rejects(async () => await freshRegistry.initialize());
+      assert.strictEqual(
+        await readFile(config.registry.path, 'utf8'),
+        invalidRegistry
+      );
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// cross-process transactions
+// ---------------------------------------------------------------------------
+
+describe('PortRegistry cross-process transactions', () => {
+  it('preserves every update from independently initialized processes', async () => {
+    const workers = [
+      startRegistryWorker(config, 'worker-a', 4000),
+      startRegistryWorker(config, 'worker-b', 4001)
+    ];
+
+    try {
+      await Promise.all(workers.map(async (worker) => await worker.ready));
+      for (const worker of workers) {
+        assert.strictEqual(worker.process.send('start'), true);
+      }
+
+      const results = await Promise.all(
+        workers.map(async (worker) => await worker.result)
+      );
+      assert.ok(results.every((result) => result.success));
+
+      const persisted: unknown = JSON.parse(
+        await readFile(config.registry.path, 'utf8')
+      );
+      assert.ok(typeof persisted === 'object' && persisted !== null);
+      assert.ok('ports' in persisted);
+      assert.ok(typeof persisted.ports === 'object' && persisted.ports !== null);
+      assert.ok('version' in persisted);
+      assert.strictEqual(persisted.version, '1.0.0');
+      assert.ok('last_updated' in persisted);
+      assert.ok(typeof persisted.last_updated === 'string');
+      assert.ok(!Number.isNaN(Date.parse(persisted.last_updated)));
+      assert.deepStrictEqual(Object.keys(persisted.ports).sort(), ['4000', '4001']);
+
+      for (const [port, appName] of [
+        ['4000', 'worker-a'],
+        ['4001', 'worker-b']
+      ]) {
+        const registration: unknown = (
+          persisted.ports as Record<string, unknown>
+        )[port];
+        assert.ok(typeof registration === 'object' && registration !== null);
+        assert.ok('app_name' in registration);
+        assert.strictEqual(registration.app_name, appName);
+        assert.ok('port' in registration);
+        assert.strictEqual(registration.port, Number(port));
+        assert.ok('status' in registration);
+        assert.strictEqual(registration.status, 'active');
+        assert.ok('registered_at' in registration);
+        assert.ok(typeof registration.registered_at === 'string');
+        assert.ok(!Number.isNaN(Date.parse(registration.registered_at)));
+      }
+    } finally {
+      for (const worker of workers) {
+        if (worker.process.exitCode === null && worker.process.signalCode === null) {
+          worker.process.kill();
+        }
+      }
+    }
+  });
+
+  it('reloads fresh state for every mutation and reconciles the instance', async () => {
+    await registry.registerPort('target', 4000);
+
+    const urlWriter = new PortRegistry(config);
+    await urlWriter.initialize();
+    await registry.registerPort('peer-before-url', 4001);
+    await urlWriter.updateNgrokUrl('target', 'https://target.ngrok.io');
+    assert.strictEqual(urlWriter.queryPorts().total, 2);
+    assert.strictEqual(
+      urlWriter.getRegistrationByApp('target')?.ngrok_url,
+      'https://target.ngrok.io'
+    );
+
+    const monitorWriter = new PortRegistry(config);
+    await monitorWriter.initialize();
+    await registry.registerPort('peer-before-monitor', 4002);
+    assert.strictEqual(await monitorWriter.setMonitor('target', true), true);
+    assert.strictEqual(monitorWriter.queryPorts().total, 3);
+    assert.strictEqual(
+      monitorWriter.getRegistrationByApp('target')?.monitor,
+      true
+    );
+
+    const releaseWriter = new PortRegistry(config);
+    await releaseWriter.initialize();
+    await registry.registerPort('peer-before-release', 4003);
+    assert.strictEqual((await releaseWriter.releasePort('target')).success, true);
+    assert.strictEqual(releaseWriter.queryPorts().total, 3);
+    assert.strictEqual(releaseWriter.getRegistrationByApp('target'), null);
+
+    const persisted = new PortRegistry(config);
+    await persisted.initialize();
+    assert.deepStrictEqual(
+      persisted
+        .queryPorts()
+        .registrations.map((registration) => registration.app_name)
+        .sort(),
+      ['peer-before-monitor', 'peer-before-release', 'peer-before-url']
+    );
+    assert.strictEqual(
+      persisted.getRegistrationByPort(4000),
+      null,
+      'released registrations remain persisted but inactive'
+    );
   });
 });
 

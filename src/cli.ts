@@ -12,31 +12,51 @@ import { NgrokManager } from './ngrok-manager.js';
 import type { Config } from './types/index.js';
 
 const program = new Command();
-const SECRET_FIELD_NAME = /(?:auth|token|secret|password|passphrase|credential|api[_-]?key)/i;
+const DISPLAY_SAFE_CONFIG_FIELDS = new Set([
+  'port_range.start',
+  'port_range.end',
+  'ngrok.region',
+  'ngrok.domain',
+  'ngrok.ip_allow',
+  'ngrok.ip_deny',
+  'registry.path',
+  'server.name',
+  'server.version',
+  'server.description'
+]);
 
 /**
- * Replace values of secret-bearing configuration fields while retaining the
- * surrounding structure needed to inspect a configuration safely.
+ * Retain only explicit display-safe configuration fields. Unknown fields are
+ * treated as secrets so future configuration additions fail closed.
  */
-function redactSecrets(value: unknown, fieldName?: string): unknown {
-  if (fieldName && SECRET_FIELD_NAME.test(fieldName)) {
+function redactSecrets(value: unknown, path: string[] = []): unknown {
+  const fieldPath = path.join('.');
+
+  if (DISPLAY_SAFE_CONFIG_FIELDS.has(fieldPath)) {
+    return value;
+  }
+
+  const containsDisplaySafeField = [...DISPLAY_SAFE_CONFIG_FIELDS].some(
+    (safeField) => safeField.startsWith(`${fieldPath}.`)
+  );
+  if (fieldPath && !containsDisplaySafeField) {
     return value ? '(set)' : '(not set)';
   }
 
   if (Array.isArray(value)) {
-    return value.map((item) => redactSecrets(item));
+    return value.map((item) => redactSecrets(item, path));
   }
 
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value).map(([key, nestedValue]) => [
         key,
-        redactSecrets(nestedValue, key)
+        redactSecrets(nestedValue, [...path, key])
       ])
     );
   }
 
-  return value;
+  return value ? '(set)' : '(not set)';
 }
 
 function redactConfig(config: Config): Config {

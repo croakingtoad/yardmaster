@@ -443,7 +443,8 @@ HTTP Basic Auth protects tunnel endpoints:
 
 ```bash
 export NGROK_BASIC_AUTH="username:password"
-yardmaster register secure-app
+export NGROK_AUTH_TOKEN="your_token_here"
+yardmaster register secure-app --tunnel
 ```
 
 All tunnels created after setting `NGROK_BASIC_AUTH` require username/password authentication.
@@ -459,7 +460,8 @@ export NGROK_IP_ALLOW="1.2.3.4/32,10.0.0.0/8"
 # Deny specific IP ranges
 export NGROK_IP_DENY="192.168.1.0/24"
 
-yardmaster register restricted-app
+export NGROK_AUTH_TOKEN="your_token_here"
+yardmaster register restricted-app --tunnel
 ```
 
 **Note:** IP restrictions require a paid ngrok account. Free accounts receive error `ERR_NGROK_9017`.
@@ -615,7 +617,7 @@ yardmaster/
 - File locking for concurrency safety
 - Event-driven file watching (fsnotify)
 - Input validation with error messages
-- Test suite (25 tests total)
+- Test suite
 - Pagination for large port lists
 
 ### Planned Features

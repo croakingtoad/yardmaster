@@ -4,7 +4,7 @@
 
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,14 +52,40 @@ function runCli(command: 'config' | 'status', home: string): Promise<{ stdout: s
 
 describe('CLI secret redaction', () => {
   for (const command of ['config', 'status'] as const) {
-    it(`${command} never emits the complete ngrok token`, async () => {
+    it(`${command} renders the ngrok token as a redaction marker`, async () => {
       const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
       tempDirectories.push(home);
 
       const { stdout, stderr } = await runCli(command, home);
 
+      const marker = command === 'config'
+        ? '"auth_token": "(set)"'
+        : 'ngrok Auth Token: (set)';
+      const tokenPrefix = knownToken.substring(0, 8);
+
+      assert.ok(stdout.includes(marker));
+      assert.ok(!stdout.includes(tokenPrefix));
+      assert.ok(!stderr.includes(tokenPrefix));
       assert.ok(!stdout.includes(knownToken));
       assert.ok(!stderr.includes(knownToken));
     });
   }
+
+  it('redacts an unknown nested config field by default', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+    tempDirectories.push(home);
+    const configDirectory = join(home, '.yardmaster');
+    const unknownSecret = 'unlisted-private-key-value';
+
+    await mkdir(configDirectory, { recursive: true });
+    await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+      ngrok: { private_key: unknownSecret }
+    }));
+
+    const { stdout, stderr } = await runCli('config', home);
+
+    assert.ok(stdout.includes('"private_key": "(set)"'));
+    assert.ok(!stdout.includes(unknownSecret));
+    assert.ok(!stderr.includes(unknownSecret));
+  });
 });

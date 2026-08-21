@@ -55,7 +55,8 @@ export class PortRegistry {
    */
   async registerPort(
     appName: string,
-    desiredPort?: number
+    desiredPort?: number,
+    monitor?: boolean
   ): Promise<PortRegistrationResult> {
     // Check if app already registered
     const existing = Object.values(this.data.ports).find(
@@ -122,6 +123,7 @@ export class PortRegistry {
       pid: process.pid,
       registered_at: new Date().toISOString(),
       status: 'active',
+      monitor,
       security: {
         basic_auth: !!this.config.ngrok.basic_auth,
         ip_restrictions: !!(this.config.ngrok.ip_allow?.length || this.config.ngrok.ip_deny?.length),
@@ -161,6 +163,17 @@ export class PortRegistry {
       // Log tunnel URL update (this happens after tunnel creation)
       await logger.logTunnelCreated(appName, registration.port, ngrokUrl);
     }
+  }
+
+  async setMonitor(appName: string, monitor: boolean): Promise<boolean> {
+    const registration = Object.values(this.data.ports).find(
+      (reg) => reg.app_name === appName && reg.status === 'active'
+    );
+    if (!registration) return false;
+    registration.monitor = monitor;
+    this.data.last_updated = new Date().toISOString();
+    await this.save();
+    return true;
   }
 
   /**
@@ -297,6 +310,18 @@ export class PortRegistry {
    */
   private async save(): Promise<void> {
     await this.ensureDirectory();
+
+    // proper-lockfile requires the target file to exist before locking;
+    // create it atomically on first save ('wx' fails if it already exists)
+    if (!existsSync(this.registryPath)) {
+      try {
+        await writeFile(this.registryPath, '{}', { flag: 'wx' });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw error;
+        }
+      }
+    }
 
     // Acquire exclusive lock for writing
     const release = await lockfile.lock(this.registryPath, {

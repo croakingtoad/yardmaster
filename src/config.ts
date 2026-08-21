@@ -133,12 +133,9 @@ function validateConfig(config: Config): void {
     throw new Error('Invalid port range: start must be less than end');
   }
 
-  // Validate ngrok auth token
-  if (!config.ngrok.auth_token) {
-    throw new Error(
-      'ngrok auth token is required. Set in config or NGROK_AUTH_TOKEN env var'
-    );
-  }
+  // ngrok auth token is intentionally NOT required here: tunnels are opt-in,
+  // so the token is only validated when a tunnel is actually requested
+  // (see NgrokManager.initialize)
 
   // Validate registry path
   if (!config.registry.path) {

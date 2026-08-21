@@ -10,6 +10,7 @@ export interface PortRegistration {
   pid: number | null;
   registered_at: string;
   status: 'active' | 'released';
+  monitor?: boolean;
   security?: {
     basic_auth: boolean;
     ip_restrictions: boolean;

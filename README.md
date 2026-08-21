@@ -24,7 +24,7 @@ Automatic port allocation and ngrok tunnel management for AI agents via MCP prot
 ## Features
 
 - **Automatic Port Allocation**: Assigns ports from configurable range (default: 3000-9000)
-- **ngrok Tunnel Creation**: Creates public HTTPS tunnels automatically
+- **ngrok Tunnel Creation**: Opt-in public HTTPS tunnels (`tunnel: true` / `--tunnel`)
 - **MCP Protocol Support**: Four tools for AI agent integration
 - **CLI Interface**: Manual port management via command line
 - **Terminal UI (TUI)**: Interactive interface built with Go and bubbletea
@@ -176,14 +176,14 @@ For AI agents like Claude, add to your MCP config (e.g., `claude_desktop_config.
 #### Available MCP Tools
 
 **register_port**
-- Input: `app_name` (required), `desired_port` (optional)
+- Input: `app_name` (required), `desired_port` (optional), `tunnel` (optional, default `false`)
 - Output: `{ port, ngrok_url, success, message }`
-- Creates tunnel and registers port
+- Registers port; only creates an ngrok tunnel when `tunnel: true` is passed
 
 **release_port**
 - Input: `app_name` (required)
 - Output: `{ port, success, message }`
-- Closes tunnel and releases port
+- Closes tunnel (if any) and releases port
 
 **query_ports**
 - Input: `filter` (optional)

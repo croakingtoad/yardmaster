@@ -62,7 +62,7 @@ class YardmasterServer {
         {
           name: 'register_port',
           description:
-            'Register a port for an application and create an ngrok tunnel. If port is not specified, one will be auto-assigned from the configured range.',
+            'Yardmaster port registry: register a port for an application. Use when asked to register, claim, or reserve a port for a dev server or app. If port is not specified, one will be auto-assigned from the configured range. Does NOT create a public tunnel unless tunnel=true is passed.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -74,6 +74,11 @@ class YardmasterServer {
                 type: 'number',
                 description:
                   'Optional specific port number. If not provided, will auto-assign from range.'
+              },
+              tunnel: {
+                type: 'boolean',
+                description:
+                  'Set true to also expose the port publicly via an ngrok tunnel (requires ngrok auth token). Default false: registry entry only, no tunnel. Only enable when the user explicitly asks for a public/ngrok URL.'
               }
             },
             required: ['app_name']
@@ -82,7 +87,7 @@ class YardmasterServer {
         {
           name: 'release_port',
           description:
-            'Release a registered port and stop its ngrok tunnel. Frees the port for other applications.',
+            'Yardmaster port registry: release a registered port and stop its ngrok tunnel if one exists. Use when asked to release, free, or unregister a port. Frees the port for other applications.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -97,7 +102,7 @@ class YardmasterServer {
         {
           name: 'query_ports',
           description:
-            'List all registered ports with their applications and ngrok URLs. Optionally filter by app name or port number.',
+            'Yardmaster port registry: list all registered ports with their applications and ngrok URLs. Use when asked what ports are in use, what is running where, or to look up the port registry. Optionally filter by app name or port number.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -112,7 +117,7 @@ class YardmasterServer {
         {
           name: 'get_available_port',
           description:
-            'Get the next available port in the configured range. Useful for checking port availability before registration.',
+            'Yardmaster port registry: get the next available/free port in the configured range. Use when asked to find an open port for a new dev server. Useful for checking port availability before registration.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -171,6 +176,7 @@ class YardmasterServer {
   private async handleRegisterPort(args: {
     app_name: string;
     desired_port?: number;
+    tunnel?: boolean;
   }) {
     this.ensureInitialized();
 
@@ -186,7 +192,28 @@ class YardmasterServer {
       };
     }
 
-    // Create ngrok tunnel
+    // Tunnels are opt-in: only create one when explicitly requested
+    if (args.tunnel !== true) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                success: true,
+                app_name: args.app_name,
+                port: result.port,
+                ngrok_url: null,
+                message: `Port ${result.port} registered for '${args.app_name}' (no tunnel; pass tunnel=true to expose publicly)`
+              },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    }
+
     try {
       const ngrokUrl = await this.ngrokManager!.createTunnel(
         result.port,

@@ -43,11 +43,13 @@ program
       );
 
       for (const reg of result.registrations) {
-        console.log(`🚂 ${reg.app_name}`);
+        const monitorBadge = reg.monitor === true ? '👁️ ' : reg.monitor === false ? '🚫 ' : '❓ ';
+        console.log(`${monitorBadge}🚂 ${reg.app_name}`);
         console.log(`   Port: ${reg.port}`);
         console.log(`   ngrok: ${reg.ngrok_url || '(not tunneled)'}`);
         console.log(`   Registered: ${new Date(reg.registered_at).toLocaleString()}`);
         console.log(`   Status: ${reg.status}`);
+        console.log(`   Monitor: ${reg.monitor === true ? 'yes' : reg.monitor === false ? 'no' : 'unset'}`);
         console.log('─'.repeat(80));
       }
 
@@ -66,7 +68,9 @@ program
   .description('Register a port for an application')
   .argument('<app-name>', 'Application name')
   .argument('[port]', 'Optional specific port number')
-  .option('--no-tunnel', 'Skip creating ngrok tunnel')
+  .option('--tunnel', 'Also expose the port publicly via an ngrok tunnel')
+  .option('--monitor', 'Mark this app for monitoring')
+  .option('--no-monitor', 'Mark this app to skip monitoring')
   .action(async (appName: string, port: string | undefined, options) => {
     try {
       const config = await loadConfig();
@@ -74,9 +78,10 @@ program
       await registry.initialize();
 
       const desiredPort = port ? parseInt(port, 10) : undefined;
+      const monitor = options.monitor === true ? true : options.monitor === false ? false : undefined;
 
       // Register port
-      const result = await registry.registerPort(appName, desiredPort);
+      const result = await registry.registerPort(appName, desiredPort, monitor);
 
       if (!result.success) {
         console.error(`❌ ${result.message}`);
@@ -85,8 +90,8 @@ program
 
       console.log(`✅ Port ${result.port} registered for '${appName}'`);
 
-      // Create ngrok tunnel if requested
-      if (options.tunnel !== false) {
+      // Tunnels are opt-in: only create one when --tunnel is passed
+      if (options.tunnel === true) {
         console.log('🌐 Creating ngrok tunnel...');
 
         const ngrokManager = new NgrokManager(config);
@@ -168,7 +173,7 @@ program
       console.log(`Registry Path: ${config.registry.path}`);
       console.log(`Active Registrations: ${result.total}`);
       console.log(`ngrok Region: ${config.ngrok.region}`);
-      console.log(`ngrok Auth Token: ${config.ngrok.auth_token.substring(0, 8)}...`);
+      console.log(`ngrok Auth Token: ${config.ngrok.auth_token ? `${config.ngrok.auth_token.substring(0, 8)}...` : '(not set)'}`);
       console.log('─'.repeat(50));
       console.log();
     } catch (error) {
@@ -190,6 +195,35 @@ program
       console.log('\n⚙️  Yardmaster Configuration\n');
       console.log(JSON.stringify(config, null, 2));
       console.log();
+    } catch (error) {
+      console.error('Error:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+/**
+ * Set monitor flag on an existing registration
+ */
+program
+  .command('monitor')
+  .description('Set whether an app should be monitored')
+  .argument('<app-name>', 'Application name')
+  .option('--off', 'Disable monitoring for this app')
+  .action(async (appName: string, options) => {
+    try {
+      const config = await loadConfig();
+      const registry = new PortRegistry(config);
+      await registry.initialize();
+
+      const enable = !options.off;
+      const found = await registry.setMonitor(appName, enable);
+
+      if (!found) {
+        console.error(`❌ No active registration found for '${appName}'`);
+        process.exit(1);
+      }
+
+      console.log(`✅ '${appName}' monitoring ${enable ? 'enabled' : 'disabled'}`);
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : error);
       process.exit(1);

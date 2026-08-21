@@ -43,6 +43,12 @@ export class NgrokManager {
       return;
     }
 
+    if (!this.config.ngrok.auth_token) {
+      throw new Error(
+        'ngrok auth token is required to create tunnels. Set it in ~/.yardmaster/config.json or the NGROK_AUTH_TOKEN env var'
+      );
+    }
+
     try {
       // Set auth token from config
       await ngrok.authtoken(this.config.ngrok.auth_token);

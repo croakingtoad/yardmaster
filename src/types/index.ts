@@ -3,6 +3,8 @@
  * Zero Mock Policy: All types represent real data structures
  */
 
+import type { LogWriteResult } from '../logger.js';
+
 export interface PortRegistration {
   app_name: string;
   port: number;
@@ -59,6 +61,7 @@ export interface PortRegistrationResult {
   port: number;
   ngrok_url: string;
   message?: string;
+  activity_log?: LogWriteResult;
 }
 
 export interface PortReleaseResult {
@@ -66,6 +69,7 @@ export interface PortReleaseResult {
   app_name: string;
   port: number;
   message?: string;
+  activity_log?: LogWriteResult;
 }
 
 export interface PortQueryResult {

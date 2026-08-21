@@ -5,6 +5,8 @@
  * behavior is exercised through a real in-memory MCP client/server transport.
  */
 
+import './test-entrypoint.js';
+
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mkdtemp, rm } from 'fs/promises';

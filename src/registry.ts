@@ -8,7 +8,11 @@ import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname } from 'path';
 import * as lockfile from 'proper-lockfile';
-import { logger as defaultLogger, type Logger } from './logger.js';
+import {
+  logger as defaultLogger,
+  type Logger,
+  type LogWriteResult
+} from './logger.js';
 import type {
   PortRegistration,
   RegistryData,
@@ -240,7 +244,13 @@ export class PortRegistry {
     });
 
     if (result.success) {
-      await this.activityLogger.logRegister(appName, result.port);
+      return {
+        ...result,
+        activity_log: await this.activityLogger.logRegister(
+          appName,
+          result.port
+        )
+      };
     }
 
     return result;
@@ -249,7 +259,10 @@ export class PortRegistry {
   /**
    * Update ngrok URL for a registered port
    */
-  async updateNgrokUrl(appName: string, ngrokUrl: string): Promise<void> {
+  async updateNgrokUrl(
+    appName: string,
+    ngrokUrl: string
+  ): Promise<LogWriteResult | null> {
     const port = await this.mutate((data) => {
       const registration = Object.values(data.ports).find(
         (reg) => reg.app_name === appName && reg.status === 'active'
@@ -263,8 +276,13 @@ export class PortRegistry {
     });
 
     if (port !== null) {
-      await this.activityLogger.logTunnelCreated(appName, port, ngrokUrl);
+      return await this.activityLogger.logTunnelCreated(
+        appName,
+        port,
+        ngrokUrl
+      );
     }
+    return null;
   }
 
   async setMonitor(appName: string, monitor: boolean): Promise<boolean> {
@@ -317,7 +335,13 @@ export class PortRegistry {
     });
 
     if (result.success) {
-      await this.activityLogger.logRelease(appName, result.port);
+      return {
+        ...result,
+        activity_log: await this.activityLogger.logRelease(
+          appName,
+          result.port
+        )
+      };
     }
 
     return result;

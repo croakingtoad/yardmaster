@@ -2,6 +2,8 @@
  * Tests for input validation
  */
 
+import './test-entrypoint.js';
+
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { validateBasicAuth, validateCIDR, validateCIDRList } from './validation.js';

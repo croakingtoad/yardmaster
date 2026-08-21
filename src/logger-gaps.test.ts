@@ -2,6 +2,8 @@
  * Additional coverage for logger edge cases not covered by logger.test.ts
  */
 
+import './test-entrypoint.js';
+
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mkdir, mkdtemp, readFile, rm } from 'fs/promises';

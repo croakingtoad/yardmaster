@@ -3,6 +3,8 @@
  * Zero Mock Policy: Real file I/O with temp directories
  */
 
+import './test-entrypoint.js';
+
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { loadConfig } from './config.js';

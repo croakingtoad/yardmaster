@@ -2,6 +2,8 @@
  * Additional coverage for validation edge cases not covered by validation.test.ts
  */
 
+import './test-entrypoint.js';
+
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { validateBasicAuth, validateCIDR, validateCIDRList } from './validation.js';

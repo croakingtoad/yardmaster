@@ -3,6 +3,8 @@
  * Zero Mock Policy: Real file I/O with temp registry files
  */
 
+import './test-entrypoint.js';
+
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -336,6 +338,17 @@ describe('PortRegistry cross-process transactions', () => {
 // ---------------------------------------------------------------------------
 
 describe('PortRegistry.registerPort()', () => {
+  it('surfaces degraded logging without failing the registration', async () => {
+    const degradedRegistry = new PortRegistry(config, new Logger(tmpDir));
+    await degradedRegistry.initialize();
+
+    const result = await degradedRegistry.registerPort('audit-degraded', 4000);
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.activity_log?.status, 'degraded');
+    assert.ok(degradedRegistry.getRegistrationByApp('audit-degraded'));
+  });
+
   it('registers a specific port successfully', async () => {
     const result = await registry.registerPort('app-a', 4001);
     assert.strictEqual(result.success, true);

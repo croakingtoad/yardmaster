@@ -9,6 +9,7 @@ import { Command } from 'commander';
 import { loadConfig } from './config.js';
 import { PortRegistry } from './registry.js';
 import { NgrokManager } from './ngrok-manager.js';
+import type { LogWriteResult } from './logger.js';
 import type { Config } from './types/index.js';
 
 const program = new Command();
@@ -24,6 +25,16 @@ const DISPLAY_SAFE_CONFIG_FIELDS = new Set([
   'server.version',
   'server.description'
 ]);
+
+function reportDegradedActivityLog(
+  ...results: Array<LogWriteResult | null | undefined>
+): void {
+  for (const result of results) {
+    if (result?.status === 'degraded') {
+      console.error(`⚠️  ${result.error}`);
+    }
+  }
+}
 
 /**
  * Retain only explicit display-safe configuration fields. Unknown fields are
@@ -139,6 +150,7 @@ program
         process.exit(1);
       }
 
+      reportDegradedActivityLog(result.activity_log);
       console.log(`✅ Port ${result.port} registered for '${appName}'`);
 
       // Tunnels are opt-in: only create one when --tunnel is passed
@@ -146,11 +158,18 @@ program
         console.log('🌐 Creating ngrok tunnel...');
 
         const ngrokManager = new NgrokManager(config);
-        const ngrokUrl = await ngrokManager.createTunnel(result.port, appName);
+        const tunnelResult = await ngrokManager.createTunnel(
+          result.port,
+          appName
+        );
 
-        await registry.updateNgrokUrl(appName, ngrokUrl);
+        const registryLog = await registry.updateNgrokUrl(
+          appName,
+          tunnelResult.url
+        );
+        reportDegradedActivityLog(tunnelResult.activity_log, registryLog);
 
-        console.log(`   ngrok URL: ${ngrokUrl}`);
+        console.log(`   ngrok URL: ${tunnelResult.url}`);
         console.log();
         console.log('⚠️  Tunnel will remain active until you run:');
         console.log(`   yardmaster release ${appName}`);
@@ -186,7 +205,8 @@ program
       if (registration.ngrok_url) {
         console.log('🌐 Closing ngrok tunnel...');
         const ngrokManager = new NgrokManager(config);
-        await ngrokManager.closeTunnel(appName);
+        const tunnelResult = await ngrokManager.closeTunnel(appName);
+        reportDegradedActivityLog(tunnelResult.activity_log);
       }
 
       // Release from registry
@@ -197,6 +217,7 @@ program
         process.exit(1);
       }
 
+      reportDegradedActivityLog(result.activity_log);
       console.log(`✅ Released port ${result.port} from '${appName}'`);
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : error);

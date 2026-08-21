@@ -2,6 +2,8 @@
  * CLI output tests using the compiled executable and real temporary files.
  */
 
+import './test-entrypoint.js';
+
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';

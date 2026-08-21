@@ -17,7 +17,11 @@ import {
 import { loadConfig } from './config.js';
 import { PortRegistry } from './registry.js';
 import { NgrokManager } from './ngrok-manager.js';
-import { logger as defaultLogger, type Logger } from './logger.js';
+import {
+  logger as defaultLogger,
+  type Logger,
+  type LogWriteResult
+} from './logger.js';
 import type { Config } from './types/index.js';
 
 /**
@@ -210,7 +214,8 @@ export class YardmasterServer {
                 app_name: args.app_name,
                 port: result.port,
                 ngrok_url: null,
-                message: `Port ${result.port} registered for '${args.app_name}' (no tunnel; pass tunnel=true to expose publicly)`
+                message: `Port ${result.port} registered for '${args.app_name}' (no tunnel; pass tunnel=true to expose publicly)`,
+                activity_log: result.activity_log
               },
               null,
               2
@@ -221,13 +226,16 @@ export class YardmasterServer {
     }
 
     try {
-      const ngrokUrl = await this.ngrokManager!.createTunnel(
+      const tunnelResult = await this.ngrokManager!.createTunnel(
         result.port,
         args.app_name
       );
 
       // Update registry with ngrok URL
-      await this.registry!.updateNgrokUrl(args.app_name, ngrokUrl);
+      const registryLog = await this.registry!.updateNgrokUrl(
+        args.app_name,
+        tunnelResult.url
+      );
 
       return {
         content: [
@@ -238,8 +246,13 @@ export class YardmasterServer {
                 success: true,
                 app_name: args.app_name,
                 port: result.port,
-                ngrok_url: ngrokUrl,
-                message: `Port ${result.port} registered for '${args.app_name}' with ngrok tunnel`
+                ngrok_url: tunnelResult.url,
+                message: `Port ${result.port} registered for '${args.app_name}' with ngrok tunnel`,
+                activity_log: {
+                  registration: result.activity_log,
+                  tunnel: tunnelResult.activity_log,
+                  registry_update: registryLog
+                }
               },
               null,
               2
@@ -259,10 +272,12 @@ export class YardmasterServer {
    */
   private async handleReleasePort(args: { app_name: string }) {
     this.ensureInitialized();
+    let tunnelActivityLog: LogWriteResult | null = null;
 
     // Close ngrok tunnel first
     try {
-      await this.ngrokManager!.closeTunnel(args.app_name);
+      const tunnelResult = await this.ngrokManager!.closeTunnel(args.app_name);
+      tunnelActivityLog = tunnelResult.activity_log;
     } catch (error) {
       console.warn(`Warning: Failed to close ngrok tunnel: ${error}`);
     }
@@ -281,7 +296,11 @@ export class YardmasterServer {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(result, null, 2)
+          text: JSON.stringify(
+            { ...result, tunnel_activity_log: tunnelActivityLog },
+            null,
+            2
+          )
         }
       ]
     };

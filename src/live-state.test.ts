@@ -86,12 +86,18 @@ async function runOtherTests(): Promise<number | null> {
     .map((file) => join(distDirectory, file));
   const childEnvironment = { ...process.env };
   delete childEnvironment.NODE_TEST_CONTEXT;
+  childEnvironment.YARDMASTER_LIVE_STATE_GUARD = '1';
+  const forwardedArguments = process.argv.slice(2);
 
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--test', ...files], {
-      env: childEnvironment,
-      stdio: 'inherit'
-    });
+    const child = spawn(
+      process.execPath,
+      ['--test', ...forwardedArguments, ...files],
+      {
+        env: childEnvironment,
+        stdio: 'inherit'
+      }
+    );
     child.once('error', reject);
     child.once('close', resolve);
   });

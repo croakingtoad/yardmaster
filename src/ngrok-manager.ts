@@ -4,7 +4,11 @@
  */
 
 import ngrok, { type Listener } from '@ngrok/ngrok';
-import { logger as defaultLogger, type Logger } from './logger.js';
+import {
+  logger as defaultLogger,
+  type Logger,
+  type LogWriteResult
+} from './logger.js';
 import type { Config, TunnelInfo } from './types/index.js';
 
 export interface NgrokForwardOptions {
@@ -27,6 +31,30 @@ interface ActiveTunnel {
 export interface NgrokSdk {
   authtoken(authToken: string): Promise<void>;
   forward(options: NgrokForwardOptions): Promise<Listener>;
+}
+
+export interface TunnelCreationResult {
+  url: string;
+  activity_log: LogWriteResult | null;
+}
+
+export interface TunnelCloseResult {
+  closed: boolean;
+  activity_log: LogWriteResult | null;
+}
+
+export class NgrokOperationError extends Error {
+  constructor(
+    message: string,
+    readonly activity_log: LogWriteResult
+  ) {
+    super(
+      activity_log.status === 'degraded'
+        ? `${message}; ${activity_log.error}`
+        : message
+    );
+    this.name = 'NgrokOperationError';
+  }
 }
 
 export class NgrokManager {
@@ -79,13 +107,16 @@ export class NgrokManager {
    * @param appName - Application name for labeling
    * @returns Public ngrok URL
    */
-  async createTunnel(port: number, appName: string): Promise<string> {
+  async createTunnel(
+    port: number,
+    appName: string
+  ): Promise<TunnelCreationResult> {
     await this.initialize();
 
     // Check if tunnel already exists for this app
     if (this.tunnels.has(appName)) {
       const existing = this.tunnels.get(appName)!;
-      return existing.url;
+      return { url: existing.url, activity_log: null };
     }
 
     try {
@@ -130,19 +161,27 @@ export class NgrokManager {
       });
 
       // Log tunnel creation (additional log beyond registry's updateNgrokUrl)
-      await this.activityLogger.logTunnelCreated(appName, port, url);
+      const activityLog = await this.activityLogger.logTunnelCreated(
+        appName,
+        port,
+        url
+      );
 
-      return url;
+      return { url, activity_log: activityLog };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
       // Log tunnel creation error
-      await this.activityLogger.logError(`Failed to create tunnel for ${appName}:${port}`, appName, port, {
-        error: errorMessage
-      });
+      const activityLog = await this.activityLogger.logError(
+        `Failed to create tunnel for ${appName}:${port}`,
+        appName,
+        port,
+        { error: errorMessage }
+      );
 
-      throw new Error(
-        `Failed to create tunnel for ${appName}:${port}: ${errorMessage}`
+      throw new NgrokOperationError(
+        `Failed to create tunnel for ${appName}:${port}: ${errorMessage}`,
+        activityLog
       );
     }
   }
@@ -151,12 +190,12 @@ export class NgrokManager {
    * Close a tunnel by app name
    * @param appName - Application name
    */
-  async closeTunnel(appName: string): Promise<void> {
+  async closeTunnel(appName: string): Promise<TunnelCloseResult> {
     const tunnel = this.tunnels.get(appName);
 
     if (!tunnel) {
       // Not an error - tunnel may have already been closed
-      return;
+      return { closed: false, activity_log: null };
     }
 
     try {
@@ -164,20 +203,28 @@ export class NgrokManager {
       await tunnel.listener.close();
 
       // Log tunnel closure
-      await this.activityLogger.logTunnelClosed(appName, tunnel.port);
+      const activityLog = await this.activityLogger.logTunnelClosed(
+        appName,
+        tunnel.port
+      );
 
       // Remove from active tunnels
       this.tunnels.delete(appName);
+      return { closed: true, activity_log: activityLog };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
       // Log tunnel close error
-      await this.activityLogger.logError(`Failed to close tunnel for ${appName}`, appName, tunnel.port, {
-        error: errorMessage
-      });
+      const activityLog = await this.activityLogger.logError(
+        `Failed to close tunnel for ${appName}`,
+        appName,
+        tunnel.port,
+        { error: errorMessage }
+      );
 
-      throw new Error(
-        `Failed to close tunnel for ${appName}: ${errorMessage}`
+      throw new NgrokOperationError(
+        `Failed to close tunnel for ${appName}: ${errorMessage}`,
+        activityLog
       );
     }
   }
@@ -215,7 +262,7 @@ export class NgrokManager {
    * Graceful shutdown - close all tunnels
    */
   async shutdown(): Promise<void> {
-    const closePromises: Promise<void>[] = [];
+    const closePromises: Promise<TunnelCloseResult>[] = [];
 
     for (const [appName] of this.tunnels) {
       closePromises.push(this.closeTunnel(appName));

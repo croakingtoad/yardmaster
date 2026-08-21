@@ -6,13 +6,20 @@
  * to be set and will hit ngrok's API — skip them in CI without the token.
  */
 
+import './test-entrypoint.js';
+
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Listener } from '@ngrok/ngrok';
 import { Logger } from './logger.js';
-import { NgrokManager, type NgrokSdk } from './ngrok-manager.js';
+import {
+  NgrokManager,
+  NgrokOperationError,
+  type NgrokSdk
+} from './ngrok-manager.js';
 import type { Config } from './types/index.js';
 
 function makeConfig(authToken = 'dummy-token'): Config {
@@ -40,11 +47,86 @@ function makeManager(config: Config, sdk?: NgrokSdk): NgrokManager {
   return new NgrokManager(config, sdk, activityLogger);
 }
 
+class TestListener implements Listener {
+  constructor(private readonly publicUrl: string) {}
+
+  url(): string {
+    return this.publicUrl;
+  }
+
+  proto(): string {
+    return 'https';
+  }
+
+  labels(): Record<string, string> {
+    return {};
+  }
+
+  id(): string {
+    return 'test-listener';
+  }
+
+  forwardsTo(): string {
+    return 'localhost:4000';
+  }
+
+  metadata(): string {
+    return '';
+  }
+
+  async forward(): Promise<void> {}
+
+  async join(): Promise<void> {}
+
+  async close(): Promise<void> {}
+}
+
 // ---------------------------------------------------------------------------
 // Pure state-management (no network required)
 // ---------------------------------------------------------------------------
 
 describe('NgrokManager — state management (no network)', () => {
+  it('surfaces degraded logging without failing tunnel create or close', async () => {
+    const listener = new TestListener('https://audit-degraded.ngrok.io');
+    const sdk: NgrokSdk = {
+      async authtoken(): Promise<void> {},
+      async forward(): Promise<Listener> {
+        return listener;
+      }
+    };
+    const mgr = new NgrokManager(makeConfig(), sdk, new Logger(tmpDir));
+
+    const created = await mgr.createTunnel(4000, 'audit-degraded');
+    assert.strictEqual(created.url, listener.url());
+    assert.ok(created.activity_log);
+    assert.strictEqual(created.activity_log.status, 'degraded');
+    assert.strictEqual(mgr.hasTunnel('audit-degraded'), true);
+
+    const closed = await mgr.closeTunnel('audit-degraded');
+    assert.strictEqual(closed.closed, true);
+    assert.strictEqual(closed.activity_log?.status, 'degraded');
+    assert.strictEqual(mgr.hasTunnel('audit-degraded'), false);
+  });
+
+  it('attaches degraded logging to a tunnel creation error', async () => {
+    const sdk: NgrokSdk = {
+      async authtoken(): Promise<void> {},
+      async forward(): Promise<never> {
+        throw new Error('SDK connection failed');
+      }
+    };
+    const mgr = new NgrokManager(makeConfig(), sdk, new Logger(tmpDir));
+
+    try {
+      await mgr.createTunnel(4000, 'audit-error');
+      assert.fail('createTunnel should reject when the SDK fails');
+    } catch (error) {
+      assert.ok(error instanceof NgrokOperationError);
+      assert.strictEqual(error.activity_log.status, 'degraded');
+      assert.match(error.message, /SDK connection failed/);
+    }
+  });
+
   it('starts with no active tunnels', () => {
     const mgr = makeManager(makeConfig());
     assert.strictEqual(mgr.getTunnelCount(), 0);
@@ -149,10 +231,13 @@ describe('NgrokManager — integration (real ngrok)', () => {
     { skip: INTEGRATION_SKIP_REASON },
     async () => {
       const mgr = makeManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
-      const url = await mgr.createTunnel(4000, 'int-test-app');
-      assert.ok(url.startsWith('https://'), `Expected HTTPS URL, got: ${url}`);
+      const result = await mgr.createTunnel(4000, 'int-test-app');
+      assert.ok(
+        result.url.startsWith('https://'),
+        `Expected HTTPS URL, got: ${result.url}`
+      );
       assert.strictEqual(mgr.hasTunnel('int-test-app'), true);
-      assert.strictEqual(mgr.getTunnelUrl('int-test-app'), url);
+      assert.strictEqual(mgr.getTunnelUrl('int-test-app'), result.url);
       assert.strictEqual(mgr.getTunnelCount(), 1);
       await mgr.closeTunnel('int-test-app');
     }
@@ -163,9 +248,9 @@ describe('NgrokManager — integration (real ngrok)', () => {
     { skip: INTEGRATION_SKIP_REASON },
     async () => {
       const mgr = makeManager(makeConfig(process.env.NGROK_AUTH_TOKEN!));
-      const url1 = await mgr.createTunnel(4000, 'dedup-app');
-      const url2 = await mgr.createTunnel(4000, 'dedup-app');
-      assert.strictEqual(url1, url2);
+      const first = await mgr.createTunnel(4000, 'dedup-app');
+      const second = await mgr.createTunnel(4000, 'dedup-app');
+      assert.strictEqual(first.url, second.url);
       assert.strictEqual(mgr.getTunnelCount(), 1);
       await mgr.closeTunnel('dedup-app');
     }

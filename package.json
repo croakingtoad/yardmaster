@@ -14,8 +14,8 @@
     "cli": "node dist/cli.js",
     "lint": "eslint src --ext .ts",
     "type-check": "tsc --noEmit",
-    "test": "npm run build && node --test dist/live-state.test.js",
-    "test:watch": "node --test --watch src/**/*.test.ts"
+    "test": "npm run build && node dist/live-state.test.js",
+    "test:watch": "node -e \"console.error('test:watch is disabled because it bypasses the live-state guard; use npm test'); process.exit(1)\""
   },
   "keywords": [
     "port-registry",

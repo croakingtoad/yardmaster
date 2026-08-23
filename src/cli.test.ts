@@ -97,18 +97,18 @@ function runCommand(
   });
 }
 
-function runCliWithReadOnlyConfigDirectory(
+function runCliWithReadOnlyConfig(
   args: string[],
   home: string
 ): Promise<CliResult> {
-  const directory = join(home, '.yardmaster');
+  const path = configPath(home);
   const script = [
-    'directory=$1',
+    'config=$1',
     'node=$2',
     'cli=$3',
     'shift 3',
-    'mount --bind "$directory" "$directory"',
-    'mount -o remount,bind,ro "$directory"',
+    'mount --bind "$config" "$config"',
+    'mount -o remount,bind,ro "$config"',
     'exec "$node" "$cli" "$@"'
   ].join(' && ');
 
@@ -121,13 +121,31 @@ function runCliWithReadOnlyConfigDirectory(
       '-c',
       script,
       'yardmaster-read-only-test',
-      directory,
+      path,
       process.execPath,
       cliPath,
       ...args
     ],
     createChildEnvironment(home)
   );
+}
+
+async function unprivilegedUserNamespaceSkipReason(): Promise<string | null> {
+  try {
+    const result = await runCommand(
+      'unshare',
+      ['-Ur', '-m', 'true'],
+      process.env
+    );
+    if (result.code === 0) {
+      return null;
+    }
+
+    return `unprivileged user namespaces are unavailable: ${result.stderr.trim() || `unshare exited ${result.code}`}`;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return `unprivileged user namespaces are unavailable: ${detail}`;
+  }
 }
 
 async function createTemporaryHome(): Promise<string> {
@@ -369,22 +387,35 @@ describe('CLI config writes', () => {
     });
   }
 
-  it('preserves config and leaves no temp file when the directory is read-only', async () => {
+  it('preserves config and leaves no temp file when atomic rename fails', async (test) => {
+    const skipReason = await unprivilegedUserNamespaceSkipReason();
+    if (skipReason !== null) {
+      test.skip(skipReason);
+      return;
+    }
+
     const home = await createTemporaryHome();
     const directory = join(home, '.yardmaster');
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await writeFile(configPath(home), '{"ngrok":{"domain":"keep.ngrok.app"}}\n', {
       mode: 0o600
     });
+    await chmod(configPath(home), 0o600);
     const originalHash = sha256(await readFile(configPath(home)));
 
-    const result = await runCliWithReadOnlyConfigDirectory(
+    const result = await runCliWithReadOnlyConfig(
       ['config', 'set', 'ngrok.domain', 'must-not-persist.ngrok.app'],
       home
     );
 
     assert.strictEqual(result.code, 1, result.stderr);
     assert.match(result.stderr, /^Error:/m);
+    assert.match(result.stderr, /\bEBUSY\b/);
+    assert.match(result.stderr, /\brename\b/);
+    assert.ok(
+      result.stderr.includes(join(directory, '.config.json.')),
+      result.stderr
+    );
     assert.strictEqual(sha256(await readFile(configPath(home))), originalHash);
     const temporaryFiles = (await readdir(directory)).filter(
       (file) => file.startsWith('.config.json.') && file.endsWith('.tmp')

@@ -2,6 +2,7 @@ package models
 
 import (
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -87,6 +88,33 @@ func TestSaveSecurityConfigCmdSurfacesCLIError(t *testing.T) {
 	}
 }
 
+func TestSaveSecurityConfigCmdRejectsBasicAuthWithoutLeakingResult(t *testing.T) {
+	const credential = "alice:missing-password"
+	runner := func(args ...string) ([]byte, error) {
+		if len(args) >= 3 && args[2] == "ngrok.basic_auth" {
+			return []byte("Error: Basic auth must be in format username:password\n"), errors.New("exit status 1")
+		}
+		return []byte("ok\n"), nil
+	}
+
+	msg := saveSecurityConfigCmd(SecurityConfigSave{
+		BasicAuth: credential,
+	}, runner)().(securityConfigSaveResultMsg)
+
+	if msg.err == nil {
+		t.Fatal("expected basic auth rejection")
+	}
+	if msg.field != SecurityConfigFieldBasicAuth {
+		t.Errorf("save result field = %v, want basic auth", msg.field)
+	}
+	if strings.Contains(msg.err.Error(), credential) {
+		t.Fatal("save result leaked rejected basic auth plaintext")
+	}
+	if msg.basicAuthSet != nil {
+		t.Errorf("rejected basic auth unexpectedly changed set state: %v", *msg.basicAuthSet)
+	}
+}
+
 func TestSaveSecurityConfigCmdSetsAndUnsetsThroughCLI(t *testing.T) {
 	var calls [][]string
 	runner := func(args ...string) ([]byte, error) {
@@ -117,10 +145,15 @@ func TestSaveSecurityConfigCmdSetsAndUnsetsThroughCLI(t *testing.T) {
 }
 
 func TestLoadSecurityConfigCmdUsesRedactedConfigCommand(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/yardmaster-config-json.stdout")
+	if err != nil {
+		t.Fatalf("read shared CLI contract fixture: %v", err)
+	}
+
 	var calls [][]string
 	runner := func(args ...string) ([]byte, error) {
 		calls = append(calls, append([]string(nil), args...))
-		return []byte(`{"ngrok":{"basic_auth":"(set)"}}`), nil
+		return fixture, nil
 	}
 
 	msg := loadSecurityConfigCmd(runner)().(securityConfigLoadResultMsg)
@@ -130,24 +163,63 @@ func TestLoadSecurityConfigCmdUsesRedactedConfigCommand(t *testing.T) {
 	if !msg.values.BasicAuthSet {
 		t.Fatal("load result did not recognize redacted basic auth sentinel")
 	}
-	if !reflect.DeepEqual(calls, [][]string{{"config"}}) {
-		t.Errorf("runner calls = %#v, want config command", calls)
+	if msg.values.Domain != "fixture.ngrok.app" {
+		t.Errorf("loaded domain = %q, want fixture.ngrok.app", msg.values.Domain)
+	}
+	if !reflect.DeepEqual(calls, [][]string{{"config", "--json"}}) {
+		t.Errorf("runner calls = %#v, want config --json command", calls)
 	}
 }
 
-func TestSecurityConfigSaveClearsCredentialBeforeCommandRuns(t *testing.T) {
+func TestSecurityConfigSaveRetainsCredentialUntilCommandSucceeds(t *testing.T) {
+	const credential = "alice:missing-password"
 	state := NewSecurityConfigState()
 	state.Loading = false
 	state.CurrentField = SecurityConfigFieldSave
-	state.BasicAuthInput.SetValue("alice:correct-horse")
+	state.BasicAuthInput.SetValue(credential)
 	m := &Model{CurrentView: ViewSecurityConfig, SecurityConfig: &state}
 
 	_, cmd := m.handleSecurityConfigInput(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected save command")
 	}
-	if got := m.SecurityConfig.BasicAuthInput.Value(); got != "" {
-		t.Fatalf("basic auth retained in model after save started: %q", got)
+	if got := m.SecurityConfig.BasicAuthInput.Value(); got != credential {
+		t.Fatalf("basic auth input after save started = %q, want retained credential", got)
+	}
+
+	_, cmd = m.handleSecurityConfigInput(securityConfigSaveResultMsg{
+		field: SecurityConfigFieldBasicAuth,
+		err:   errors.New("Error: Basic auth must be in format username:password"),
+	})
+	if cmd != nil {
+		t.Fatal("basic auth rejection returned an unexpected command")
+	}
+	if got := state.BasicAuthInput.Value(); got != credential {
+		t.Fatalf("basic auth input after rejection = %q, want retained credential", got)
+	}
+	if state.CurrentField != SecurityConfigFieldBasicAuth || !state.BasicAuthInput.Focused() {
+		t.Fatal("rejected basic auth field was not left focused for correction")
+	}
+}
+
+func TestSecurityConfigClearsCredentialAfterBasicAuthCommandSucceeds(t *testing.T) {
+	state := NewSecurityConfigState()
+	state.Loading = false
+	state.Saving = true
+	state.BasicAuthInput.SetValue("alice:correct-horse")
+	m := &Model{CurrentView: ViewSecurityConfig, SecurityConfig: &state}
+	accepted := true
+
+	_, cmd := m.handleSecurityConfigInput(securityConfigSaveResultMsg{
+		field:        SecurityConfigFieldIPAllow,
+		err:          errors.New("Error: invalid CIDR: not-a-cidr"),
+		basicAuthSet: &accepted,
+	})
+	if cmd != nil {
+		t.Fatal("save failure returned an unexpected command")
+	}
+	if got := state.BasicAuthInput.Value(); got != "" {
+		t.Fatalf("accepted basic auth remained in model: %q", got)
 	}
 }
 

@@ -24,6 +24,10 @@ import { spawn } from 'node:child_process';
 
 const tempDirectories: string[] = [];
 const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+const configJsonFixturePath = fileURLToPath(new URL(
+  '../tui/internal/models/testdata/yardmaster-config-json.stdout',
+  import.meta.url
+));
 const knownToken = 'qc-cli-secret-token-must-not-appear';
 
 afterEach(async () => {
@@ -199,6 +203,25 @@ describe('CLI secret redaction', () => {
     assert.ok(stdout.includes('"private_key": "(set)"'));
     assert.ok(!stdout.includes(unknownSecret));
     assert.ok(!stderr.includes(unknownSecret));
+  });
+
+  it('emits the shared machine-readable config contract without framing', async () => {
+    const home = await createTemporaryHome();
+    const expected = (await readFile(configJsonFixturePath, 'utf8')).trimEnd();
+    const basicAuth = 'fixture-user:fixture-password';
+
+    const { code, stdout, stderr } = await runCli(['config', '--json'], home, {
+      NGROK_DOMAIN: 'fixture.ngrok.app',
+      NGROK_BASIC_AUTH: basicAuth,
+      NGROK_IP_ALLOW: '10.0.0.0/8,192.0.2.0/24',
+      NGROK_IP_DENY: '203.0.113.0/24'
+    });
+
+    assert.strictEqual(code, 0, stderr);
+    assert.strictEqual(stdout, expected);
+    assert.deepStrictEqual(JSON.parse(stdout), JSON.parse(expected));
+    assert.strictEqual(stderr, '');
+    assert.ok(!stdout.includes(basicAuth));
   });
 });
 

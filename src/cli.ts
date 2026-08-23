@@ -430,12 +430,19 @@ program
 const configCommand = program
   .command('config')
   .description('Show current configuration')
-  .action(async () => {
+  .option('--json', 'Print redacted configuration as JSON only')
+  .action(async (options: { json?: boolean }) => {
     try {
       const config = await loadConfig();
+      const safeConfig = redactConfig(config);
+
+      if (options.json) {
+        process.stdout.write(JSON.stringify(safeConfig));
+        return;
+      }
 
       console.log('\n⚙️  Yardmaster Configuration\n');
-      console.log(JSON.stringify(redactConfig(config), null, 2));
+      console.log(JSON.stringify(safeConfig, null, 2));
       console.log();
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : error);

@@ -155,7 +155,7 @@ func defaultYardmasterRunner(args ...string) ([]byte, error) {
 
 func loadSecurityConfigCmd(runner yardmasterRunner) tea.Cmd {
 	return func() tea.Msg {
-		output, err := runner("config")
+		output, err := runner("config", "--json")
 		if err != nil {
 			return securityConfigLoadResultMsg{err: commandError(output, err)}
 		}
@@ -307,8 +307,6 @@ func (m *Model) handleSecurityConfigInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 					IPAllow:        state.IPAllowInput.Value(),
 					IPDeny:         state.IPDenyInput.Value(),
 				}
-				// The command owns the only remaining short-lived copy.
-				state.BasicAuthInput.SetValue("")
 				state.ValidationError = ""
 				state.Saving = true
 				return m, saveSecurityConfigCmd(save, defaultYardmasterRunner)
@@ -352,6 +350,9 @@ func (m *Model) handleSecurityConfigInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case securityConfigSaveResultMsg:
 		state.Saving = false
 		if msg.basicAuthSet != nil {
+			// The CLI accepted the credential (or unset request), so the
+			// editor no longer needs to retain its masked input.
+			state.BasicAuthInput.SetValue("")
 			state.BasicAuthSet = *msg.basicAuthSet
 			state.BasicAuthUnset = false
 		}

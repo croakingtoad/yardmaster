@@ -1,8 +1,10 @@
 package models
 
 import (
+	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -168,6 +170,56 @@ func TestLoadSecurityConfigCmdUsesRedactedConfigCommand(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, [][]string{{"config", "--json"}}) {
 		t.Errorf("runner calls = %#v, want config --json command", calls)
+	}
+}
+
+func TestDefaultYardmasterRunnerSeparatesWarningFromSuccessfulStdout(t *testing.T) {
+	fixturePath, err := filepath.Abs("testdata/yardmaster-config-json.stdout")
+	if err != nil {
+		t.Fatalf("resolve CLI contract fixture: %v", err)
+	}
+
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(binDir, "yardmaster")
+	script := "#!/bin/sh\nprintf 'Warning: skipped invalid CIDR\\n' >&2\ncat \"$YARDMASTER_JSON_FIXTURE\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write temporary yardmaster executable: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("YARDMASTER_JSON_FIXTURE", fixturePath)
+
+	output, err := defaultYardmasterRunner("config", "--json")
+	if err != nil {
+		t.Fatalf("defaultYardmasterRunner() error = %v", err)
+	}
+	if bytes.Contains(output, []byte("Warning:")) {
+		t.Fatalf("successful runner output contains stderr warning: %q", output)
+	}
+
+	values, err := parseSecurityConfig(output)
+	if err != nil {
+		t.Fatalf("parse runner stdout: %v", err)
+	}
+	if values.Domain != "fixture.ngrok.app" {
+		t.Errorf("loaded domain = %q, want fixture.ngrok.app", values.Domain)
+	}
+}
+
+func TestDefaultYardmasterRunnerReturnsStderrOnFailure(t *testing.T) {
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(binDir, "yardmaster")
+	script := "#!/bin/sh\nprintf 'Error: rejected setting\\n' >&2\nexit 1\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write temporary yardmaster executable: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	output, err := defaultYardmasterRunner("config", "set", "ngrok.ip_allow", "bad")
+	if err == nil {
+		t.Fatal("defaultYardmasterRunner() error = nil, want subprocess failure")
+	}
+	if got := strings.TrimSpace(string(output)); got != "Error: rejected setting" {
+		t.Fatalf("failure output = %q, want stderr message", got)
 	}
 }
 

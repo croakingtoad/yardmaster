@@ -1,6 +1,7 @@
 package models
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -150,7 +151,20 @@ func (s *SecurityConfigState) move(delta int) {
 }
 
 func defaultYardmasterRunner(args ...string) ([]byte, error) {
-	return exec.Command("yardmaster", args...).CombinedOutput()
+	cmd := exec.Command("yardmaster", args...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err == nil {
+		return stdout.Bytes(), nil
+	}
+	if stderr.Len() > 0 {
+		return stderr.Bytes(), err
+	}
+	return stdout.Bytes(), err
 }
 
 func loadSecurityConfigCmd(runner yardmasterRunner) tea.Cmd {

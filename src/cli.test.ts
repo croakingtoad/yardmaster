@@ -90,4 +90,27 @@ describe('CLI secret redaction', () => {
     assert.ok(!stdout.includes(unknownSecret));
     assert.ok(!stderr.includes(unknownSecret));
   });
+
+  for (const command of ['config', 'status'] as const) {
+    it(`${command} redacts an object nested beneath an allowlisted leaf`, async () => {
+      const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+      tempDirectories.push(home);
+      const configDirectory = join(home, '.yardmaster');
+      const unexpectedValue = 'nested-value-must-not-appear';
+
+      await mkdir(configDirectory, { recursive: true });
+      await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+        ngrok: { region: { unanticipated: unexpectedValue } }
+      }));
+
+      const { stdout, stderr } = await runCli(command, home);
+
+      const marker = command === 'config'
+        ? '"region": "(set)"'
+        : 'ngrok Region: (set)';
+      assert.ok(stdout.includes(marker));
+      assert.ok(!stdout.includes(unexpectedValue));
+      assert.ok(!stderr.includes(unexpectedValue));
+    });
+  }
 });

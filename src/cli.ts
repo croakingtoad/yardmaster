@@ -13,18 +13,26 @@ import type { LogWriteResult } from './logger.js';
 import type { Config } from './types/index.js';
 
 const program = new Command();
-const DISPLAY_SAFE_CONFIG_FIELDS = new Set([
-  'port_range.start',
-  'port_range.end',
-  'ngrok.region',
-  'ngrok.domain',
-  'ngrok.ip_allow',
-  'ngrok.ip_deny',
-  'registry.path',
-  'server.name',
-  'server.version',
-  'server.description'
+const DISPLAY_SAFE_CONFIG_FIELDS = new Map<string, 'number' | 'string' | 'string[]'>([
+  ['port_range.start', 'number'],
+  ['port_range.end', 'number'],
+  ['ngrok.region', 'string'],
+  ['ngrok.domain', 'string'],
+  ['ngrok.ip_allow', 'string[]'],
+  ['ngrok.ip_deny', 'string[]'],
+  ['registry.path', 'string'],
+  ['server.name', 'string'],
+  ['server.version', 'string'],
+  ['server.description', 'string']
 ]);
+
+function hasExpectedDisplayShape(fieldPath: string, value: unknown): boolean {
+  const expectedShape = DISPLAY_SAFE_CONFIG_FIELDS.get(fieldPath);
+  if (expectedShape === 'string[]') {
+    return Array.isArray(value) && value.every((item) => typeof item === 'string');
+  }
+  return typeof value === expectedShape;
+}
 
 function reportDegradedActivityLog(
   ...results: Array<LogWriteResult | null | undefined>
@@ -43,11 +51,14 @@ function reportDegradedActivityLog(
 function redactSecrets(value: unknown, path: string[] = []): unknown {
   const fieldPath = path.join('.');
 
-  if (DISPLAY_SAFE_CONFIG_FIELDS.has(fieldPath)) {
+  if (
+    DISPLAY_SAFE_CONFIG_FIELDS.has(fieldPath) &&
+    hasExpectedDisplayShape(fieldPath, value)
+  ) {
     return value;
   }
 
-  const containsDisplaySafeField = [...DISPLAY_SAFE_CONFIG_FIELDS].some(
+  const containsDisplaySafeField = [...DISPLAY_SAFE_CONFIG_FIELDS.keys()].some(
     (safeField) => safeField.startsWith(`${fieldPath}.`)
   );
   if (fieldPath && !containsDisplaySafeField) {

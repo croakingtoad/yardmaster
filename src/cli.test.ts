@@ -15,6 +15,7 @@ import { spawn } from 'node:child_process';
 const tempDirectories: string[] = [];
 const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
 const knownToken = 'qc-cli-secret-token-must-not-appear';
+const knownBasicAuth = 'qc-user:qc-cli-basic-auth-secret-must-not-appear';
 
 afterEach(async () => {
   await Promise.all(tempDirectories.splice(0).map((directory) => rm(directory, {
@@ -29,7 +30,8 @@ function runCli(command: 'config' | 'status', home: string): Promise<{ stdout: s
       env: {
         ...process.env,
         HOME: home,
-        NGROK_AUTH_TOKEN: knownToken
+        NGROK_AUTH_TOKEN: knownToken,
+        NGROK_BASIC_AUTH: knownBasicAuth
       }
     });
     let stdout = '';
@@ -72,6 +74,20 @@ describe('CLI secret redaction', () => {
       assert.ok(!stderr.includes(knownToken));
     });
   }
+
+  it('config renders ngrok basic auth as a redaction marker', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+    tempDirectories.push(home);
+
+    const { stdout, stderr } = await runCli('config', home);
+    const basicAuthPrefix = knownBasicAuth.substring(0, 8);
+
+    assert.ok(stdout.includes('"basic_auth": "(set)"'));
+    assert.ok(!stdout.includes(basicAuthPrefix));
+    assert.ok(!stderr.includes(basicAuthPrefix));
+    assert.ok(!stdout.includes(knownBasicAuth));
+    assert.ok(!stderr.includes(knownBasicAuth));
+  });
 
   it('redacts an unknown nested config field by default', async () => {
     const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));

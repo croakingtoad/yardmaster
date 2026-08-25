@@ -39,10 +39,14 @@ type DisplayShape<Value> =
         ? 'string[]'
         : never;
 
+type SecretConfigPath = 'ngrok.auth_token' | 'ngrok.basic_auth';
+
 type ConfigDisplayPolicy = {
   [Path in LeafPath<Config>]: {
     readonly shape: DisplayShape<ValueAtPath<Config, Path>>;
-    readonly visibility: 'display-safe' | 'secret';
+    readonly visibility: Path extends SecretConfigPath
+      ? 'secret'
+      : 'display-safe' | 'secret';
   };
 };
 

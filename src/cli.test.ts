@@ -113,4 +113,49 @@ describe('CLI secret redaction', () => {
       assert.ok(!stderr.includes(unexpectedValue));
     });
   }
+
+  for (const field of ['ip_allow', 'ip_deny'] as const) {
+    it(`config redacts ${field} when an array member is not a string`, async () => {
+      const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+      tempDirectories.push(home);
+      const configDirectory = join(home, '.yardmaster');
+      const unexpectedValue = `${field}-member-must-not-appear`;
+
+      await mkdir(configDirectory, { recursive: true });
+      await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+        ngrok: {
+          [field]: ['192.0.2.0/24', { unexpected: unexpectedValue }]
+        }
+      }));
+
+      const { stdout, stderr } = await runCli('config', home);
+
+      assert.ok(stdout.includes(`"${field}": "(set)"`));
+      assert.ok(!stdout.includes(unexpectedValue));
+      assert.ok(!stderr.includes(unexpectedValue));
+    });
+  }
+
+  for (const command of ['config', 'status'] as const) {
+    it(`${command} redacts a wrong-shaped numeric config leaf`, async () => {
+      const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+      tempDirectories.push(home);
+      const configDirectory = join(home, '.yardmaster');
+      const unexpectedValue = 'numeric-value-must-not-appear';
+
+      await mkdir(configDirectory, { recursive: true });
+      await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+        port_range: { start: unexpectedValue }
+      }));
+
+      const { stdout, stderr } = await runCli(command, home);
+
+      const marker = command === 'config'
+        ? '"start": "(set)"'
+        : 'Port Range: (set) - 9000';
+      assert.ok(stdout.includes(marker));
+      assert.ok(!stdout.includes(unexpectedValue));
+      assert.ok(!stderr.includes(unexpectedValue));
+    });
+  }
 });

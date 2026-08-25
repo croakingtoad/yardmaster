@@ -13,18 +13,61 @@ import type { LogWriteResult } from './logger.js';
 import type { Config } from './types/index.js';
 
 const program = new Command();
-const DISPLAY_SAFE_CONFIG_FIELDS = new Map<string, 'number' | 'string' | 'string[]'>([
-  ['port_range.start', 'number'],
-  ['port_range.end', 'number'],
-  ['ngrok.region', 'string'],
-  ['ngrok.domain', 'string'],
-  ['ngrok.ip_allow', 'string[]'],
-  ['ngrok.ip_deny', 'string[]'],
-  ['registry.path', 'string'],
-  ['server.name', 'string'],
-  ['server.version', 'string'],
-  ['server.description', 'string']
-]);
+type LeafPath<Value extends object> = {
+  [Key in keyof Value & string]-?: NonNullable<Value[Key]> extends readonly unknown[]
+    ? Key
+    : NonNullable<Value[Key]> extends object
+      ? `${Key}.${LeafPath<NonNullable<Value[Key]>>}`
+      : Key;
+}[keyof Value & string];
+
+type ValueAtPath<Value, Path extends string> =
+  Path extends `${infer Key}.${infer RemainingPath}`
+    ? Key extends keyof Value
+      ? ValueAtPath<NonNullable<Value[Key]>, RemainingPath>
+      : never
+    : Path extends keyof Value
+      ? NonNullable<Value[Path]>
+      : never;
+
+type DisplayShape<Value> =
+  [Value] extends [number]
+    ? 'number'
+    : [Value] extends [string]
+      ? 'string'
+      : [Value] extends [readonly string[]]
+        ? 'string[]'
+        : never;
+
+type ConfigDisplayPolicy = {
+  [Path in LeafPath<Config>]: {
+    readonly shape: DisplayShape<ValueAtPath<Config, Path>>;
+    readonly visibility: 'display-safe' | 'secret';
+  };
+};
+
+const CONFIG_DISPLAY_POLICY = {
+  'port_range.start': { shape: 'number', visibility: 'display-safe' },
+  'port_range.end': { shape: 'number', visibility: 'display-safe' },
+  'ngrok.auth_token': { shape: 'string', visibility: 'secret' },
+  'ngrok.region': { shape: 'string', visibility: 'display-safe' },
+  'ngrok.domain': { shape: 'string', visibility: 'display-safe' },
+  'ngrok.basic_auth': { shape: 'string', visibility: 'secret' },
+  'ngrok.ip_allow': { shape: 'string[]', visibility: 'display-safe' },
+  'ngrok.ip_deny': { shape: 'string[]', visibility: 'display-safe' },
+  'registry.path': { shape: 'string', visibility: 'display-safe' },
+  'server.name': { shape: 'string', visibility: 'display-safe' },
+  'server.version': { shape: 'string', visibility: 'display-safe' },
+  'server.description': { shape: 'string', visibility: 'display-safe' }
+} as const satisfies ConfigDisplayPolicy;
+
+const DISPLAY_SAFE_CONFIG_FIELDS = new Map(
+  Object.entries(CONFIG_DISPLAY_POLICY).flatMap(([path, policy]) =>
+    policy.visibility === 'display-safe'
+      ? [[path, policy.shape] as const]
+      : []
+  )
+);
 
 function hasExpectedDisplayShape(fieldPath: string, value: unknown): boolean {
   const expectedShape = DISPLAY_SAFE_CONFIG_FIELDS.get(fieldPath);

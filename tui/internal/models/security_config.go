@@ -164,7 +164,7 @@ func loadSecurityConfigCmd(runner yardmasterRunner) tea.Cmd {
 
 		values, err := parseSecurityConfig(stdout)
 		if err != nil && len(bytes.TrimSpace(stderr)) > 0 {
-			err = fmt.Errorf("%w; yardmaster stderr: %s", err, strings.TrimSpace(string(stderr)))
+			err = fmt.Errorf("%w; yardmaster reported a diagnostic", err)
 		}
 		return securityConfigLoadResultMsg{values: values, err: err}
 	}
@@ -296,6 +296,8 @@ func stringOrNil(value string) any {
 func fieldFromConfigApplyError(stderr []byte) SecurityConfigField {
 	message := string(stderr)
 	switch {
+	case strings.Contains(message, "ngrok.domain"):
+		return SecurityConfigFieldDomain
 	case strings.Contains(message, "ngrok.basic_auth"):
 		return SecurityConfigFieldBasicAuth
 	case strings.Contains(message, "ngrok.ip_allow"):
@@ -307,14 +309,7 @@ func fieldFromConfigApplyError(stderr []byte) SecurityConfigField {
 	}
 }
 
-func commandError(stdout []byte, stderr []byte, err error) error {
-	message := strings.TrimSpace(string(stderr))
-	if message == "" {
-		message = strings.TrimSpace(string(stdout))
-	}
-	if message != "" {
-		return fmt.Errorf("%s", message)
-	}
+func commandError(_ []byte, _ []byte, err error) error {
 	return fmt.Errorf("yardmaster command failed: %w", err)
 }
 

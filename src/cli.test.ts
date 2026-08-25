@@ -39,6 +39,8 @@ afterEach(async () => {
 
 interface CliResult {
   code: number | null;
+  argv: readonly string[];
+  environment: NodeJS.ProcessEnv;
   stdout: string;
   stderr: string;
 }
@@ -99,10 +101,37 @@ function runCommand(
     });
     child.on('error', reject);
     child.on('close', (code) => {
-      resolve({ code, stdout, stderr });
+      resolve({
+        code,
+        argv: [executable, ...args],
+        environment: { ...environment },
+        stdout,
+        stderr
+      });
     });
     child.stdin.end(stdin);
   });
+}
+
+function assertCredentialAbsentFromProcessBoundary(
+  result: CliResult,
+  credential: string
+): void {
+  const surfaces = {
+    argv: result.argv.join('\0'),
+    environment: Object.entries(result.environment)
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\0'),
+    stdout: result.stdout,
+    stderr: result.stderr
+  };
+
+  for (const [surface, content] of Object.entries(surfaces)) {
+    assert.ok(
+      !content.includes(credential),
+      `credential appeared in child ${surface}`
+    );
+  }
 }
 
 function runCliWithReadOnlyConfig(
@@ -440,6 +469,46 @@ describe('CLI config writes', () => {
       assert.notStrictEqual(result.code, 0);
       assert.strictEqual(result.stdout, '');
       await assert.rejects(readFile(configPath(home)), { code: 'ENOENT' });
+    });
+  }
+
+  it('redacts a credential from malformed config apply process surfaces', async () => {
+    const home = await createTemporaryHome();
+    const credential = 'alice:supersecretpw';
+
+    const result = await runCli(
+      ['config', 'apply', '--stdin'],
+      home,
+      {},
+      credential
+    );
+
+    assert.notStrictEqual(result.code, 0);
+    assertCredentialAbsentFromProcessBoundary(result, credential);
+  });
+
+  for (const malformedConfigPath of [
+    { name: 'read', args: ['config', '--json'] },
+    {
+      name: 'write',
+      args: ['config', 'set', 'ngrok.domain', 'new.ngrok.app']
+    }
+  ]) {
+    it(`redacts a credential from malformed stored config on ${malformedConfigPath.name}`, async () => {
+      const home = await createTemporaryHome();
+      const directory = join(home, '.yardmaster');
+      const credential = 'alice:supersecretpw';
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await writeFile(
+        configPath(home),
+        credential,
+        { mode: 0o600 }
+      );
+
+      const result = await runCli(malformedConfigPath.args, home);
+
+      assert.notStrictEqual(result.code, 0);
+      assertCredentialAbsentFromProcessBoundary(result, credential);
     });
   }
 

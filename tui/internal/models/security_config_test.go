@@ -232,13 +232,81 @@ func TestLoadSecurityConfigCmdSurfacesMalformedRealConfig(t *testing.T) {
 			if msg.err == nil {
 				t.Fatal("load result error = nil, want malformed config failure")
 			}
-			if !strings.Contains(msg.err.Error(), "Error:") {
-				t.Fatalf("load error = %q, want CLI parse failure", msg.err)
+			if !strings.Contains(msg.err.Error(), "yardmaster command failed") {
+				t.Fatalf("load error = %q, want generic command failure", msg.err)
 			}
 			if !reflect.DeepEqual(msg.values, SecurityConfigValues{}) {
 				t.Fatalf("malformed config loaded defaults: %#v", msg.values)
 			}
 		})
+	}
+}
+
+func TestMalformedRealConfigCredentialIsAbsentFromTUIProcessSurfaces(t *testing.T) {
+	const credential = "alice:supersecretpw"
+	tests := []struct {
+		name string
+		run  func(yardmasterRunner) error
+	}{
+		{
+			name: "read",
+			run: func(runner yardmasterRunner) error {
+				return loadSecurityConfigCmd(runner)().(securityConfigLoadResultMsg).err
+			},
+		},
+		{
+			name: "write",
+			run: func(runner yardmasterRunner) error {
+				return saveSecurityConfigCmd(SecurityConfigSave{
+					Domain: "new.ngrok.app",
+				}, runner)().(securityConfigSaveResultMsg).err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			configDirectory := filepath.Join(home, ".yardmaster")
+			if err := os.Mkdir(configDirectory, 0o700); err != nil {
+				t.Fatalf("create config directory: %v", err)
+			}
+			malformed := []byte(credential)
+			if err := os.WriteFile(filepath.Join(configDirectory, "config.json"), malformed, 0o600); err != nil {
+				t.Fatalf("write malformed config: %v", err)
+			}
+
+			var argv []string
+			var stdout, stderr []byte
+			runner := realCLIRunner(t, home)
+			recordingRunner := func(stdin []byte, args ...string) ([]byte, []byte, error) {
+				argv = append([]string(nil), args...)
+				var err error
+				stdout, stderr, err = runner(stdin, args...)
+				return stdout, stderr, err
+			}
+
+			renderedErr := tt.run(recordingRunner)
+			if renderedErr == nil {
+				t.Fatal("TUI result error = nil, want malformed config failure")
+			}
+			assertCredentialAbsent(t, credential,
+				[]byte(strings.Join(argv, "\x00")),
+				[]byte(strings.Join(realCLIEnvironment(home), "\x00")),
+				stdout,
+				stderr,
+				[]byte(renderedErr.Error()),
+			)
+		})
+	}
+}
+
+func assertCredentialAbsent(t *testing.T, credential string, surfaces ...[]byte) {
+	t.Helper()
+	for index, surface := range surfaces {
+		if bytes.Contains(surface, []byte(credential)) {
+			t.Fatalf("credential appeared in process surface %d", index)
+		}
 	}
 }
 
@@ -256,15 +324,7 @@ func realCLIRunner(t *testing.T, home string) yardmasterRunner {
 		t.Fatalf("compiled CLI unavailable (run npm run build first): %v", err)
 	}
 
-	environment := make([]string, 0, len(os.Environ())+1)
-	for _, entry := range os.Environ() {
-		name := strings.SplitN(entry, "=", 2)[0]
-		if name == "HOME" || strings.HasPrefix(name, "NGROK_") {
-			continue
-		}
-		environment = append(environment, entry)
-	}
-	environment = append(environment, "HOME="+home)
+	environment := realCLIEnvironment(home)
 
 	return func(stdin []byte, args ...string) ([]byte, []byte, error) {
 		commandArgs := append([]string{cliPath}, args...)
@@ -278,6 +338,19 @@ func realCLIRunner(t *testing.T, home string) yardmasterRunner {
 		runErr := cmd.Run()
 		return stdout.Bytes(), stderr.Bytes(), runErr
 	}
+}
+
+func realCLIEnvironment(home string) []string {
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		name := strings.SplitN(entry, "=", 2)[0]
+		if name == "HOME" || strings.HasPrefix(name, "NGROK_") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	environment = append(environment, "HOME="+home)
+	return environment
 }
 
 func TestLoadSecurityConfigCmdUsesRedactedConfigCommand(t *testing.T) {
@@ -366,17 +439,51 @@ func TestDefaultYardmasterRunnerReturnsStderrOnFailure(t *testing.T) {
 	}
 }
 
-func TestLoadSecurityConfigCmdIncludesStderrWhenStdoutCannotBeParsed(t *testing.T) {
+func TestLoadSecurityConfigCmdDoesNotIncludeStderrWhenStdoutCannotBeParsed(t *testing.T) {
+	const credential = "alice:supersecretpw"
 	runner := func(_ []byte, _ ...string) ([]byte, []byte, error) {
-		return []byte("{"), []byte("diagnostic warning"), nil
+		return []byte("{"), []byte("diagnostic warning: " + credential), nil
 	}
 
 	msg := loadSecurityConfigCmd(runner)().(securityConfigLoadResultMsg)
 	if msg.err == nil {
 		t.Fatal("load result error = nil, want malformed stdout failure")
 	}
-	if !strings.Contains(msg.err.Error(), "diagnostic warning") {
-		t.Fatalf("load error = %q, want captured stderr", msg.err)
+	if strings.Contains(msg.err.Error(), credential) || strings.Contains(msg.err.Error(), "diagnostic warning") {
+		t.Fatalf("load error forwarded yardmaster stderr: %q", msg.err)
+	}
+}
+
+func TestCommandErrorDoesNotForwardProcessOutput(t *testing.T) {
+	const credential = "alice:supersecretpw"
+	err := commandError(
+		[]byte("stdout: "+credential),
+		[]byte("stderr: "+credential),
+		errors.New("exit status 1"),
+	)
+	if strings.Contains(err.Error(), credential) || strings.Contains(err.Error(), "stdout") || strings.Contains(err.Error(), "stderr") {
+		t.Fatalf("command error forwarded process output: %q", err)
+	}
+}
+
+func TestFieldFromConfigApplyErrorMatchesOnlyKeyName(t *testing.T) {
+	tests := []struct {
+		key  string
+		want SecurityConfigField
+	}{
+		{key: "ngrok.domain", want: SecurityConfigFieldDomain},
+		{key: "ngrok.basic_auth", want: SecurityConfigFieldBasicAuth},
+		{key: "ngrok.ip_allow", want: SecurityConfigFieldIPAllow},
+		{key: "ngrok.ip_deny", want: SecurityConfigFieldIPDeny},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			stderr := []byte("Error: invalid value for " + tt.key + ": alice:supersecretpw")
+			if got := fieldFromConfigApplyError(stderr); got != tt.want {
+				t.Fatalf("fieldFromConfigApplyError() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

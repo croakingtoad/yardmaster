@@ -106,7 +106,12 @@ async function readUserConfig(path: string): Promise<JsonObject> {
     throw error;
   }
 
-  const parsed: unknown = JSON.parse(content);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error('User config contains invalid JSON');
+  }
   if (!isJsonObject(parsed)) {
     throw new Error('User config must contain a JSON object');
   }
@@ -241,9 +246,8 @@ async function applyUserConfig(
   let payload: unknown;
   try {
     payload = JSON.parse(payloadText);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid config apply JSON: ${message}`);
+  } catch {
+    throw new Error('Invalid config apply JSON');
   }
 
   const operations = validateConfigApplyPayload(payload);

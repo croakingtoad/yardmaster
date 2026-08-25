@@ -57,14 +57,7 @@ type SecurityConfigSave struct {
 	IPDeny         string
 }
 
-type yardmasterRunner func(args ...string) ([]byte, error)
-
-type securityConfigOperation struct {
-	field SecurityConfigField
-	key   string
-	value string
-	set   bool
-}
+type yardmasterRunner func(stdin []byte, args ...string) (stdout []byte, stderr []byte, err error)
 
 type securityConfigLoadResultMsg struct {
 	values SecurityConfigValues
@@ -150,31 +143,29 @@ func (s *SecurityConfigState) move(delta int) {
 	s.focus(SecurityConfigField(next))
 }
 
-func defaultYardmasterRunner(args ...string) ([]byte, error) {
+func defaultYardmasterRunner(stdin []byte, args ...string) ([]byte, []byte, error) {
 	cmd := exec.Command("yardmaster", args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	cmd.Stdin = bytes.NewReader(stdin)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-	if err == nil {
-		return stdout.Bytes(), nil
-	}
-	if stderr.Len() > 0 {
-		return stderr.Bytes(), err
-	}
-	return stdout.Bytes(), err
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
 func loadSecurityConfigCmd(runner yardmasterRunner) tea.Cmd {
 	return func() tea.Msg {
-		output, err := runner("config", "--json")
+		stdout, stderr, err := runner(nil, "config", "--json")
 		if err != nil {
-			return securityConfigLoadResultMsg{err: commandError(output, err)}
+			return securityConfigLoadResultMsg{err: commandError(stdout, stderr, err)}
 		}
 
-		values, err := parseSecurityConfig(output)
+		values, err := parseSecurityConfig(stdout)
+		if err != nil && len(bytes.TrimSpace(stderr)) > 0 {
+			err = fmt.Errorf("%w; yardmaster stderr: %s", err, strings.TrimSpace(string(stderr)))
+		}
 		return securityConfigLoadResultMsg{values: values, err: err}
 	}
 }
@@ -198,10 +189,29 @@ func parseSecurityConfig(data []byte) (SecurityConfigValues, error) {
 			return SecurityConfigValues{}, fmt.Errorf("parse ngrok.domain: %w", err)
 		}
 	}
-	if _, ok := ngrok["basic_auth"]; ok {
-		// The supported sentinel is "(set)". Any unexpected present value
-		// still fails closed as Set and is never unmarshaled or displayed.
-		values.BasicAuthSet = true
+	if raw, ok := ngrok["basic_auth"]; ok {
+		shape := jsonValueShape(raw)
+		if shape != "string" {
+			return SecurityConfigValues{}, fmt.Errorf(
+				"parse ngrok.basic_auth: unexpected %s sentinel shape",
+				shape,
+			)
+		}
+
+		var sentinel string
+		if err := json.Unmarshal(raw, &sentinel); err != nil {
+			return SecurityConfigValues{}, fmt.Errorf("parse ngrok.basic_auth sentinel: %w", err)
+		}
+		switch sentinel {
+		case "(set)":
+			values.BasicAuthSet = true
+		case "(not set)":
+			values.BasicAuthSet = false
+		default:
+			return SecurityConfigValues{}, fmt.Errorf(
+				"parse ngrok.basic_auth: unexpected string sentinel shape",
+			)
+		}
 	}
 	if raw, ok := ngrok["ip_allow"]; ok {
 		if err := json.Unmarshal(raw, &values.IPAllow); err != nil {
@@ -217,50 +227,58 @@ func parseSecurityConfig(data []byte) (SecurityConfigValues, error) {
 	return values, nil
 }
 
+func jsonValueShape(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "empty"
+	}
+	switch trimmed[0] {
+	case '"':
+		return "string"
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	case 'n':
+		return "null"
+	case 't', 'f':
+		return "boolean"
+	default:
+		return "number"
+	}
+}
+
 func saveSecurityConfigCmd(save SecurityConfigSave, runner yardmasterRunner) tea.Cmd {
 	return func() tea.Msg {
-		operations := []securityConfigOperation{
-			{SecurityConfigFieldDomain, "ngrok.domain", save.Domain, save.Domain != ""},
+		payload := map[string]any{
+			"ngrok.domain":   stringOrNil(save.Domain),
+			"ngrok.ip_allow": stringOrNil(save.IPAllow),
+			"ngrok.ip_deny":  stringOrNil(save.IPDeny),
 		}
-
-		if save.BasicAuth != "" {
-			operations = append(operations, securityConfigOperation{
-				SecurityConfigFieldBasicAuth, "ngrok.basic_auth", save.BasicAuth, true,
-			})
-		} else if save.BasicAuthUnset {
-			operations = append(operations, securityConfigOperation{
-				field: SecurityConfigFieldBasicAuth,
-				key:   "ngrok.basic_auth",
-			})
-		}
-
-		operations = append(operations,
-			securityConfigOperation{SecurityConfigFieldIPAllow, "ngrok.ip_allow", save.IPAllow, save.IPAllow != ""},
-			securityConfigOperation{SecurityConfigFieldIPDeny, "ngrok.ip_deny", save.IPDeny, save.IPDeny != ""},
-		)
-
 		var basicAuthSet *bool
-		for _, operation := range operations {
-			args := []string{"config", "unset", operation.key}
-			if operation.set {
-				args = []string{"config", "set", operation.key, operation.value}
-			}
+		if save.BasicAuth != "" {
+			payload["ngrok.basic_auth"] = save.BasicAuth
+			updated := true
+			basicAuthSet = &updated
+		} else if save.BasicAuthUnset {
+			payload["ngrok.basic_auth"] = nil
+			updated := false
+			basicAuthSet = &updated
+		}
 
-			output, err := runner(args...)
-			if operation.field == SecurityConfigFieldBasicAuth {
-				// Do not retain the credential after its command returns.
-				save.BasicAuth = ""
-			}
-			if err != nil {
-				return securityConfigSaveResultMsg{
-					field:        operation.field,
-					err:          commandError(output, err),
-					basicAuthSet: basicAuthSet,
-				}
-			}
-			if operation.field == SecurityConfigFieldBasicAuth {
-				updated := operation.set
-				basicAuthSet = &updated
+		input, err := json.Marshal(payload)
+		if err != nil {
+			return securityConfigSaveResultMsg{err: fmt.Errorf("encode security config: %w", err)}
+		}
+		payload["ngrok.basic_auth"] = nil
+
+		stdout, stderr, err := runner(input, "config", "apply", "--stdin")
+		clear(input)
+		save.BasicAuth = ""
+		if err != nil {
+			return securityConfigSaveResultMsg{
+				field: fieldFromConfigApplyError(stderr),
+				err:   commandError(stdout, stderr, err),
 			}
 		}
 
@@ -268,8 +286,32 @@ func saveSecurityConfigCmd(save SecurityConfigSave, runner yardmasterRunner) tea
 	}
 }
 
-func commandError(output []byte, err error) error {
-	message := strings.TrimSpace(string(output))
+func stringOrNil(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func fieldFromConfigApplyError(stderr []byte) SecurityConfigField {
+	message := string(stderr)
+	switch {
+	case strings.Contains(message, "ngrok.basic_auth"):
+		return SecurityConfigFieldBasicAuth
+	case strings.Contains(message, "ngrok.ip_allow"):
+		return SecurityConfigFieldIPAllow
+	case strings.Contains(message, "ngrok.ip_deny"):
+		return SecurityConfigFieldIPDeny
+	default:
+		return SecurityConfigFieldDomain
+	}
+}
+
+func commandError(stdout []byte, stderr []byte, err error) error {
+	message := strings.TrimSpace(string(stderr))
+	if message == "" {
+		message = strings.TrimSpace(string(stdout))
+	}
 	if message != "" {
 		return fmt.Errorf("%s", message)
 	}

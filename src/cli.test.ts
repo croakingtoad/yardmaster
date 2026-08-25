@@ -53,12 +53,14 @@ const NGROK_ENVIRONMENT_VARIABLES = [
 function runCli(
   args: string[],
   home: string,
-  environment: Record<string, string> = {}
+  environment: Record<string, string> = {},
+  stdin?: string
 ): Promise<CliResult> {
   return runCommand(
     process.execPath,
     [cliPath, ...args],
-    createChildEnvironment(home, environment)
+    createChildEnvironment(home, environment),
+    stdin
   );
 }
 
@@ -81,7 +83,8 @@ function createChildEnvironment(
 function runCommand(
   executable: string,
   args: string[],
-  environment: NodeJS.ProcessEnv
+  environment: NodeJS.ProcessEnv,
+  stdin?: string
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { env: environment });
@@ -98,6 +101,7 @@ function runCommand(
     child.on('close', (code) => {
       resolve({ code, stdout, stderr });
     });
+    child.stdin.end(stdin);
   });
 }
 
@@ -253,7 +257,9 @@ describe('CLI config writes', () => {
     it(`sets ${key}`, async () => {
       const home = await createTemporaryHome();
 
-      const result = await runCli(['config', 'set', key, cliValue], home);
+      const result = key === 'ngrok.basic_auth'
+        ? await runCli(['config', 'set', key, '--stdin'], home, {}, cliValue)
+        : await runCli(['config', 'set', key, cliValue], home);
       const storedConfig = JSON.parse(await readFile(configPath(home), 'utf8'));
 
       assert.strictEqual(result.code, 0, result.stderr);
@@ -270,8 +276,10 @@ describe('CLI config writes', () => {
     const home = await createTemporaryHome();
 
     const result = await runCli(
-      ['config', 'set', 'ngrok.basic_auth', 'missing-password'],
-      home
+      ['config', 'set', 'ngrok.basic_auth', '--stdin'],
+      home,
+      {},
+      'missing-password'
     );
 
     assert.notStrictEqual(result.code, 0);
@@ -291,6 +299,168 @@ describe('CLI config writes', () => {
     assert.match(result.stderr, /missing \/prefix/);
     await assert.rejects(readFile(configPath(home)), { code: 'ENOENT' });
   });
+
+  it('rejects positional basic auth so credentials cannot cross argv', async () => {
+    const home = await createTemporaryHome();
+    const credential = 'alice:must-not-cross-argv';
+
+    const result = await runCli(
+      ['config', 'set', 'ngrok.basic_auth', credential],
+      home
+    );
+
+    assert.notStrictEqual(result.code, 0);
+    assert.match(result.stderr, /ngrok\.basic_auth.*--stdin/);
+    assert.ok(!result.stdout.includes(credential));
+    assert.ok(!result.stderr.includes(credential));
+    await assert.rejects(readFile(configPath(home)), { code: 'ENOENT' });
+  });
+
+  it('applies a complete form atomically while preserving absent and unknown keys', async () => {
+    const home = await createTemporaryHome();
+    const directory = join(home, '.yardmaster');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(configPath(home), JSON.stringify({
+      future: { keep: true },
+      ngrok: {
+        domain: 'old.ngrok.app',
+        basic_auth: 'old:credential',
+        ip_deny: ['203.0.113.0/24'],
+        future_setting: 'keep-me'
+      }
+    }), { mode: 0o600 });
+
+    const credential = 'alice:correct-horse';
+    const payload = JSON.stringify({
+      'ngrok.domain': 'new.ngrok.app',
+      'ngrok.basic_auth': credential,
+      'ngrok.ip_allow': '10.0.0.0/8,192.0.2.0/24',
+      'ngrok.ip_deny': null
+    });
+    const result = await runCli(
+      ['config', 'apply', '--stdin'],
+      home,
+      {},
+      payload
+    );
+    const storedConfig = JSON.parse(await readFile(configPath(home), 'utf8'));
+
+    assert.strictEqual(result.code, 0, result.stderr);
+    assert.strictEqual(result.stdout, [
+      'ngrok.domain: set',
+      'ngrok.basic_auth: set',
+      'ngrok.ip_allow: set',
+      'ngrok.ip_deny: unset',
+      ''
+    ].join('\n'));
+    assert.ok(!result.stdout.includes(credential));
+    assert.ok(!result.stderr.includes(credential));
+    assert.deepStrictEqual(storedConfig.future, { keep: true });
+    assert.deepStrictEqual(storedConfig.ngrok, {
+      domain: 'new.ngrok.app',
+      basic_auth: credential,
+      ip_allow: ['10.0.0.0/8', '192.0.2.0/24'],
+      future_setting: 'keep-me'
+    });
+  });
+
+  it('leaves config byte-identical when the last apply value is invalid', async () => {
+    const home = await createTemporaryHome();
+    const directory = join(home, '.yardmaster');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(
+      configPath(home),
+      '{"ngrok":{"domain":"keep.ngrok.app","basic_auth":"keep:secret"}}\n',
+      { mode: 0o600 }
+    );
+    const original = await readFile(configPath(home));
+    const payload = JSON.stringify({
+      'ngrok.domain': 'must-not-persist.ngrok.app',
+      'ngrok.basic_auth': 'alice:must-not-persist',
+      'ngrok.ip_allow': '10.0.0.0/8',
+      'ngrok.ip_deny': 'not-a-cidr'
+    });
+
+    const result = await runCli(
+      ['config', 'apply', '--stdin'],
+      home,
+      {},
+      payload
+    );
+
+    assert.notStrictEqual(result.code, 0);
+    assert.match(result.stderr, /ngrok\.ip_deny/);
+    assert.strictEqual(result.stdout, '');
+    assert.strictEqual(sha256(await readFile(configPath(home))), sha256(original));
+    assert.deepStrictEqual(await readFile(configPath(home)), original);
+  });
+
+  it('leaves keys absent from an apply payload untouched', async () => {
+    const home = await createTemporaryHome();
+    const directory = join(home, '.yardmaster');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(configPath(home), JSON.stringify({
+      ngrok: {
+        domain: 'old.ngrok.app',
+        basic_auth: 'keep:this-credential',
+        ip_allow: ['10.0.0.0/8']
+      }
+    }), { mode: 0o600 });
+
+    const result = await runCli(
+      ['config', 'apply', '--stdin'],
+      home,
+      {},
+      '{"ngrok.domain":"new.ngrok.app"}'
+    );
+    const storedConfig = JSON.parse(await readFile(configPath(home), 'utf8'));
+
+    assert.strictEqual(result.code, 0, result.stderr);
+    assert.strictEqual(storedConfig.ngrok.domain, 'new.ngrok.app');
+    assert.strictEqual(storedConfig.ngrok.basic_auth, 'keep:this-credential');
+    assert.deepStrictEqual(storedConfig.ngrok.ip_allow, ['10.0.0.0/8']);
+  });
+
+  for (const invalidPayload of [
+    { name: 'unparseable JSON', payload: '{"ngrok.domain":' },
+    { name: 'a JSON array', payload: '[]' },
+    { name: 'a non-string value', payload: '{"ngrok.domain":42}' },
+    { name: 'an unknown key', payload: '{"ngrok.auth_token":null}' }
+  ]) {
+    it(`rejects ${invalidPayload.name} apply payload without writing`, async () => {
+      const home = await createTemporaryHome();
+
+      const result = await runCli(
+        ['config', 'apply', '--stdin'],
+        home,
+        {},
+        invalidPayload.payload
+      );
+
+      assert.notStrictEqual(result.code, 0);
+      assert.strictEqual(result.stdout, '');
+      await assert.rejects(readFile(configPath(home)), { code: 'ENOENT' });
+    });
+  }
+
+  for (const malformed of [
+    { name: 'empty file', content: '' },
+    { name: 'partial JSON', content: '{"ngrok":' },
+    { name: 'non-object JSON', content: '[]' }
+  ]) {
+    it(`fails config --json with empty stdout for a malformed ${malformed.name}`, async () => {
+      const home = await createTemporaryHome();
+      const directory = join(home, '.yardmaster');
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await writeFile(configPath(home), malformed.content, { mode: 0o600 });
+
+      const result = await runCli(['config', '--json'], home);
+
+      assert.notStrictEqual(result.code, 0);
+      assert.strictEqual(result.stdout, '');
+      assert.match(result.stderr, /^Error:/m);
+    });
+  }
 
   it('rejects unknown keys without creating config', async () => {
     const home = await createTemporaryHome();
@@ -472,10 +642,9 @@ describe('CLI config writes', () => {
   it('keeps environment overrides above values written to config', async () => {
     const home = await createTemporaryHome();
     for (const { key, cliValue } of validSettings) {
-      const setResult = await runCli(
-        ['config', 'set', key, cliValue],
-        home
-      );
+      const setResult = key === 'ngrok.basic_auth'
+        ? await runCli(['config', 'set', key, '--stdin'], home, {}, cliValue)
+        : await runCli(['config', 'set', key, cliValue], home);
       assert.strictEqual(setResult.code, 0, setResult.stderr);
     }
 
@@ -497,8 +666,10 @@ describe('CLI config writes', () => {
   it('renders a stable set sentinel for basic auth and omits it when unset', async () => {
     const home = await createTemporaryHome();
     const setResult = await runCli(
-      ['config', 'set', 'ngrok.basic_auth', 'alice:correct-horse'],
-      home
+      ['config', 'set', 'ngrok.basic_auth', '--stdin'],
+      home,
+      {},
+      'alice:correct-horse'
     );
     assert.strictEqual(setResult.code, 0, setResult.stderr);
 

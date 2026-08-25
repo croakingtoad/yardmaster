@@ -2,8 +2,10 @@ package models
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -34,9 +36,9 @@ func TestParseSecurityConfig(t *testing.T) {
 			want: SecurityConfigValues{},
 		},
 		{
-			name: "unexpected basic auth value fails closed",
-			json: `{"ngrok":{"basic_auth":"unexpected"}}`,
-			want: SecurityConfigValues{BasicAuthSet: true},
+			name: "not set sentinel",
+			json: `{"ngrok":{"basic_auth":"(not set)"}}`,
+			want: SecurityConfigValues{},
 		},
 	}
 
@@ -53,96 +55,228 @@ func TestParseSecurityConfig(t *testing.T) {
 	}
 }
 
-func TestSaveSecurityConfigCmdSurfacesCLIError(t *testing.T) {
-	var calls [][]string
-	runner := func(args ...string) ([]byte, error) {
-		calls = append(calls, append([]string(nil), args...))
-		if len(args) >= 3 && args[2] == "ngrok.ip_allow" {
-			return []byte("Error: invalid CIDR: not-a-cidr\n"), errors.New("exit status 1")
-		}
-		return []byte("ok\n"), nil
+func TestParseSecurityConfigRejectsUnexpectedBasicAuthSentinels(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		shape string
+	}{
+		{name: "other string", value: `"plaintext-must-not-appear"`, shape: "string"},
+		{name: "null", value: `null`, shape: "null"},
+		{name: "number", value: `42`, shape: "number"},
+		{name: "array", value: `[]`, shape: "array"},
+		{name: "object", value: `{}`, shape: "object"},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseSecurityConfig([]byte(`{"ngrok":{"basic_auth":` + tt.value + `}}`))
+			if err == nil {
+				t.Fatal("parseSecurityConfig() error = nil, want strict sentinel rejection")
+			}
+			if !strings.Contains(err.Error(), tt.shape) {
+				t.Fatalf("parse error = %q, want shape %q", err, tt.shape)
+			}
+			if strings.Contains(err.Error(), "plaintext-must-not-appear") {
+				t.Fatal("parse error leaked an unexpected basic auth value")
+			}
+		})
+	}
+}
+
+func TestSaveSecurityConfigCmdIsAtomicAgainstRealCLI(t *testing.T) {
+	home := t.TempDir()
+	configDirectory := filepath.Join(home, ".yardmaster")
+	configPath := filepath.Join(configDirectory, "config.json")
+	if err := os.Mkdir(configDirectory, 0o700); err != nil {
+		t.Fatalf("create config directory: %v", err)
+	}
+	original := []byte("{\"ngrok\":{\"domain\":\"keep.ngrok.app\",\"basic_auth\":\"keep:secret\"}}\n")
+	if err := os.WriteFile(configPath, original, 0o600); err != nil {
+		t.Fatalf("write initial config: %v", err)
+	}
+	originalHash := sha256.Sum256(original)
+	const credential = "alice:must-not-persist"
+
+	msg := saveSecurityConfigCmd(SecurityConfigSave{
+		Domain:    "must-not-persist.ngrok.app",
+		BasicAuth: credential,
+		IPAllow:   "10.0.0.0/8",
+		IPDeny:    "not-a-cidr",
+	}, realCLIRunner(t, home))().(securityConfigSaveResultMsg)
+
+	if msg.err == nil {
+		t.Fatal("save result error = nil, want invalid final field rejection")
+	}
+	if msg.field != SecurityConfigFieldIPDeny {
+		t.Errorf("save result field = %v, want IP deny", msg.field)
+	}
+	if strings.Contains(msg.err.Error(), credential) {
+		t.Fatal("save result leaked basic auth plaintext")
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config after rejected save: %v", err)
+	}
+	if gotHash := sha256.Sum256(got); gotHash != originalHash {
+		t.Fatalf("rejected save changed config bytes:\n got %q\nwant %q", got, original)
+	}
+}
+
+func TestSaveSecurityConfigCmdKeepsCredentialOutOfArgv(t *testing.T) {
+	binDirectory := t.TempDir()
+	argvPath := filepath.Join(binDirectory, "argv")
+	stdinPath := filepath.Join(binDirectory, "stdin")
+	scriptPath := filepath.Join(binDirectory, "yardmaster")
+	script := "#!/bin/sh\ntr '\\000' '\\n' </proc/$$/cmdline >\"$ARGV_CAPTURE\"\ncat >\"$STDIN_CAPTURE\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write temporary yardmaster executable: %v", err)
+	}
+	t.Setenv("PATH", binDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ARGV_CAPTURE", argvPath)
+	t.Setenv("STDIN_CAPTURE", stdinPath)
+	const credential = "alice:argv-secret"
 
 	msg := saveSecurityConfigCmd(SecurityConfigSave{
 		Domain:    "example.ngrok.app",
-		BasicAuth: "alice:correct-horse",
-		IPAllow:   "not-a-cidr",
-		IPDeny:    "203.0.113.0/24",
-	}, runner)().(securityConfigSaveResultMsg)
-
-	if msg.err == nil || msg.err.Error() != "Error: invalid CIDR: not-a-cidr" {
-		t.Fatalf("save result error = %v", msg.err)
-	}
-	if msg.field != SecurityConfigFieldIPAllow {
-		t.Errorf("save result field = %v, want IP allow", msg.field)
-	}
-	if strings.Contains(msg.err.Error(), "alice:correct-horse") {
-		t.Fatal("save result leaked basic auth plaintext")
-	}
-
-	wantCalls := [][]string{
-		{"config", "set", "ngrok.domain", "example.ngrok.app"},
-		{"config", "set", "ngrok.basic_auth", "alice:correct-horse"},
-		{"config", "set", "ngrok.ip_allow", "not-a-cidr"},
-	}
-	if !reflect.DeepEqual(calls, wantCalls) {
-		t.Errorf("runner calls = %#v, want %#v", calls, wantCalls)
-	}
-}
-
-func TestSaveSecurityConfigCmdRejectsBasicAuthWithoutLeakingResult(t *testing.T) {
-	const credential = "alice:missing-password"
-	runner := func(args ...string) ([]byte, error) {
-		if len(args) >= 3 && args[2] == "ngrok.basic_auth" {
-			return []byte("Error: Basic auth must be in format username:password\n"), errors.New("exit status 1")
-		}
-		return []byte("ok\n"), nil
-	}
-
-	msg := saveSecurityConfigCmd(SecurityConfigSave{
 		BasicAuth: credential,
-	}, runner)().(securityConfigSaveResultMsg)
-
-	if msg.err == nil {
-		t.Fatal("expected basic auth rejection")
-	}
-	if msg.field != SecurityConfigFieldBasicAuth {
-		t.Errorf("save result field = %v, want basic auth", msg.field)
-	}
-	if strings.Contains(msg.err.Error(), credential) {
-		t.Fatal("save result leaked rejected basic auth plaintext")
-	}
-	if msg.basicAuthSet != nil {
-		t.Errorf("rejected basic auth unexpectedly changed set state: %v", *msg.basicAuthSet)
-	}
-}
-
-func TestSaveSecurityConfigCmdSetsAndUnsetsThroughCLI(t *testing.T) {
-	var calls [][]string
-	runner := func(args ...string) ([]byte, error) {
-		calls = append(calls, append([]string(nil), args...))
-		return []byte("ok\n"), nil
-	}
-
-	msg := saveSecurityConfigCmd(SecurityConfigSave{
-		BasicAuthUnset: true,
-		IPAllow:        "10.0.0.0/8,192.0.2.0/24",
-	}, runner)().(securityConfigSaveResultMsg)
+		IPAllow:   "10.0.0.0/8",
+	}, defaultYardmasterRunner)().(securityConfigSaveResultMsg)
 	if msg.err != nil {
 		t.Fatalf("save result error = %v", msg.err)
 	}
 
-	wantCalls := [][]string{
-		{"config", "unset", "ngrok.domain"},
-		{"config", "unset", "ngrok.basic_auth"},
-		{"config", "set", "ngrok.ip_allow", "10.0.0.0/8,192.0.2.0/24"},
-		{"config", "unset", "ngrok.ip_deny"},
+	argv, err := os.ReadFile(argvPath)
+	if err != nil {
+		t.Fatalf("read captured argv: %v", err)
 	}
-	if !reflect.DeepEqual(calls, wantCalls) {
-		t.Errorf("runner calls = %#v, want %#v", calls, wantCalls)
+	if bytes.Contains(argv, []byte(credential)) {
+		t.Fatalf("credential crossed process argv: %q", argv)
 	}
-	if msg.basicAuthSet == nil || *msg.basicAuthSet {
-		t.Errorf("basic auth state = %v, want false", msg.basicAuthSet)
+	argvFields := strings.Fields(string(argv))
+	if len(argvFields) < 3 {
+		t.Fatalf("yardmaster argv = %#v, want config apply --stdin suffix", argvFields)
+	}
+	if got := argvFields[len(argvFields)-3:]; !reflect.DeepEqual(got, []string{"config", "apply", "--stdin"}) {
+		t.Fatalf("yardmaster argv suffix = %#v, want config apply --stdin", got)
+	}
+	stdin, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatalf("read captured stdin: %v", err)
+	}
+	if !bytes.Contains(stdin, []byte(credential)) {
+		t.Fatal("credential was not delivered through stdin")
+	}
+}
+
+func TestSecurityConfigSentinelRoundTripFromRealCLI(t *testing.T) {
+	tests := []struct {
+		name         string
+		config       string
+		basicAuthSet bool
+	}{
+		{name: "configured", config: `{"ngrok":{"basic_auth":"alice:correct-horse"}}`, basicAuthSet: true},
+		{name: "absent", config: `{"ngrok":{}}`},
+		{name: "empty string", config: `{"ngrok":{"basic_auth":""}}`},
+		{name: "null", config: `{"ngrok":{"basic_auth":null}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			configDirectory := filepath.Join(home, ".yardmaster")
+			if err := os.Mkdir(configDirectory, 0o700); err != nil {
+				t.Fatalf("create config directory: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(configDirectory, "config.json"), []byte(tt.config), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			msg := loadSecurityConfigCmd(realCLIRunner(t, home))().(securityConfigLoadResultMsg)
+			if msg.err != nil {
+				t.Fatalf("load result error = %v", msg.err)
+			}
+			if msg.values.BasicAuthSet != tt.basicAuthSet {
+				t.Errorf("BasicAuthSet = %v, want %v", msg.values.BasicAuthSet, tt.basicAuthSet)
+			}
+		})
+	}
+
+	t.Run("unexpected string", func(t *testing.T) {
+		_, err := parseSecurityConfig([]byte(`{"ngrok":{"basic_auth":"unexpected"}}`))
+		if err == nil || !strings.Contains(err.Error(), "string") {
+			t.Fatalf("parse error = %v, want unexpected string shape", err)
+		}
+	})
+}
+
+func TestLoadSecurityConfigCmdSurfacesMalformedRealConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+	}{
+		{name: "empty", content: ""},
+		{name: "partial JSON", content: `{"ngrok":`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			configDirectory := filepath.Join(home, ".yardmaster")
+			if err := os.Mkdir(configDirectory, 0o700); err != nil {
+				t.Fatalf("create config directory: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(configDirectory, "config.json"), []byte(tt.content), 0o600); err != nil {
+				t.Fatalf("write malformed config: %v", err)
+			}
+
+			msg := loadSecurityConfigCmd(realCLIRunner(t, home))().(securityConfigLoadResultMsg)
+			if msg.err == nil {
+				t.Fatal("load result error = nil, want malformed config failure")
+			}
+			if !strings.Contains(msg.err.Error(), "Error:") {
+				t.Fatalf("load error = %q, want CLI parse failure", msg.err)
+			}
+			if !reflect.DeepEqual(msg.values, SecurityConfigValues{}) {
+				t.Fatalf("malformed config loaded defaults: %#v", msg.values)
+			}
+		})
+	}
+}
+
+func realCLIRunner(t *testing.T, home string) yardmasterRunner {
+	t.Helper()
+	nodePath, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatalf("find node executable: %v", err)
+	}
+	cliPath, err := filepath.Abs("../../../dist/cli.js")
+	if err != nil {
+		t.Fatalf("resolve compiled CLI: %v", err)
+	}
+	if _, err := os.Stat(cliPath); err != nil {
+		t.Fatalf("compiled CLI unavailable (run npm run build first): %v", err)
+	}
+
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		name := strings.SplitN(entry, "=", 2)[0]
+		if name == "HOME" || strings.HasPrefix(name, "NGROK_") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	environment = append(environment, "HOME="+home)
+
+	return func(stdin []byte, args ...string) ([]byte, []byte, error) {
+		commandArgs := append([]string{cliPath}, args...)
+		cmd := exec.Command(nodePath, commandArgs...)
+		cmd.Env = environment
+		cmd.Stdin = bytes.NewReader(stdin)
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		runErr := cmd.Run()
+		return stdout.Bytes(), stderr.Bytes(), runErr
 	}
 }
 
@@ -153,9 +287,12 @@ func TestLoadSecurityConfigCmdUsesRedactedConfigCommand(t *testing.T) {
 	}
 
 	var calls [][]string
-	runner := func(args ...string) ([]byte, error) {
+	runner := func(stdin []byte, args ...string) ([]byte, []byte, error) {
+		if len(stdin) != 0 {
+			t.Fatalf("load command received stdin: %q", stdin)
+		}
 		calls = append(calls, append([]string(nil), args...))
-		return fixture, nil
+		return fixture, nil, nil
 	}
 
 	msg := loadSecurityConfigCmd(runner)().(securityConfigLoadResultMsg)
@@ -188,15 +325,18 @@ func TestDefaultYardmasterRunnerSeparatesWarningFromSuccessfulStdout(t *testing.
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("YARDMASTER_JSON_FIXTURE", fixturePath)
 
-	output, err := defaultYardmasterRunner("config", "--json")
+	stdout, stderr, err := defaultYardmasterRunner(nil, "config", "--json")
 	if err != nil {
 		t.Fatalf("defaultYardmasterRunner() error = %v", err)
 	}
-	if bytes.Contains(output, []byte("Warning:")) {
-		t.Fatalf("successful runner output contains stderr warning: %q", output)
+	if bytes.Contains(stdout, []byte("Warning:")) {
+		t.Fatalf("successful runner stdout contains stderr warning: %q", stdout)
+	}
+	if !bytes.Contains(stderr, []byte("Warning:")) {
+		t.Fatalf("successful runner stderr = %q, want warning", stderr)
 	}
 
-	values, err := parseSecurityConfig(output)
+	values, err := parseSecurityConfig(stdout)
 	if err != nil {
 		t.Fatalf("parse runner stdout: %v", err)
 	}
@@ -214,12 +354,29 @@ func TestDefaultYardmasterRunnerReturnsStderrOnFailure(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	output, err := defaultYardmasterRunner("config", "set", "ngrok.ip_allow", "bad")
+	stdout, stderr, err := defaultYardmasterRunner(nil, "config", "set", "ngrok.ip_allow", "bad")
 	if err == nil {
 		t.Fatal("defaultYardmasterRunner() error = nil, want subprocess failure")
 	}
-	if got := strings.TrimSpace(string(output)); got != "Error: rejected setting" {
-		t.Fatalf("failure output = %q, want stderr message", got)
+	if len(stdout) != 0 {
+		t.Fatalf("failure stdout = %q, want empty", stdout)
+	}
+	if got := strings.TrimSpace(string(stderr)); got != "Error: rejected setting" {
+		t.Fatalf("failure stderr = %q, want error message", got)
+	}
+}
+
+func TestLoadSecurityConfigCmdIncludesStderrWhenStdoutCannotBeParsed(t *testing.T) {
+	runner := func(_ []byte, _ ...string) ([]byte, []byte, error) {
+		return []byte("{"), []byte("diagnostic warning"), nil
+	}
+
+	msg := loadSecurityConfigCmd(runner)().(securityConfigLoadResultMsg)
+	if msg.err == nil {
+		t.Fatal("load result error = nil, want malformed stdout failure")
+	}
+	if !strings.Contains(msg.err.Error(), "diagnostic warning") {
+		t.Fatalf("load error = %q, want captured stderr", msg.err)
 	}
 }
 
@@ -254,24 +411,23 @@ func TestSecurityConfigSaveRetainsCredentialUntilCommandSucceeds(t *testing.T) {
 	}
 }
 
-func TestSecurityConfigClearsCredentialAfterBasicAuthCommandSucceeds(t *testing.T) {
+func TestSecurityConfigAtomicSaveFailureRetainsCredential(t *testing.T) {
 	state := NewSecurityConfigState()
 	state.Loading = false
 	state.Saving = true
-	state.BasicAuthInput.SetValue("alice:correct-horse")
+	const credential = "alice:correct-horse"
+	state.BasicAuthInput.SetValue(credential)
 	m := &Model{CurrentView: ViewSecurityConfig, SecurityConfig: &state}
-	accepted := true
 
 	_, cmd := m.handleSecurityConfigInput(securityConfigSaveResultMsg{
-		field:        SecurityConfigFieldIPAllow,
-		err:          errors.New("Error: invalid CIDR: not-a-cidr"),
-		basicAuthSet: &accepted,
+		field: SecurityConfigFieldIPAllow,
+		err:   errors.New("Error: invalid CIDR: not-a-cidr"),
 	})
 	if cmd != nil {
 		t.Fatal("save failure returned an unexpected command")
 	}
-	if got := state.BasicAuthInput.Value(); got != "" {
-		t.Fatalf("accepted basic auth remained in model: %q", got)
+	if got := state.BasicAuthInput.Value(); got != credential {
+		t.Fatalf("atomic save failure basic auth = %q, want retained credential", got)
 	}
 }
 

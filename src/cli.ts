@@ -47,6 +47,11 @@ const EDITABLE_CONFIG_KEYS = [
 
 type EditableConfigKey = typeof EDITABLE_CONFIG_KEYS[number];
 type JsonObject = Record<string, unknown>;
+type ConfigApplyOperation = {
+  key: EditableConfigKey;
+  value: string | string[] | undefined;
+  action: 'set' | 'unset';
+};
 
 function isEditableConfigKey(key: string): key is EditableConfigKey {
   return (EDITABLE_CONFIG_KEYS as readonly string[]).includes(key);
@@ -193,6 +198,68 @@ async function unsetUserConfig(keyArgument: string): Promise<void> {
   const path = join(homedir(), '.yardmaster', 'config.json');
   const config = await readUserConfig(path);
   await writeUserConfig(updateNgrokSetting(config, key, undefined));
+}
+
+async function readStdin(): Promise<string> {
+  let input = '';
+  for await (const chunk of process.stdin) {
+    input += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+  }
+  return input;
+}
+
+function validateConfigApplyPayload(payload: unknown): ConfigApplyOperation[] {
+  if (!isJsonObject(payload)) {
+    throw new Error('Config apply payload must be a JSON object');
+  }
+
+  return Object.entries(payload).map(([keyArgument, rawValue]) => {
+    const key = requireEditableConfigKey(keyArgument);
+    if (rawValue === null) {
+      return { key, value: undefined, action: 'unset' };
+    }
+    if (typeof rawValue !== 'string') {
+      throw new Error(`Invalid value for "${key}": expected a string or null`);
+    }
+
+    try {
+      return {
+        key,
+        value: validateConfigValue(key, rawValue),
+        action: 'set'
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Invalid value for "${key}": ${message}`);
+    }
+  });
+}
+
+async function applyUserConfig(
+  payloadText: string
+): Promise<ConfigApplyOperation[]> {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadText);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid config apply JSON: ${message}`);
+  }
+
+  const operations = validateConfigApplyPayload(payload);
+  const path = join(homedir(), '.yardmaster', 'config.json');
+  const config = await readUserConfig(path);
+  const updatedConfig = operations.reduce(
+    (updated, operation) => updateNgrokSetting(
+      updated,
+      operation.key,
+      operation.value
+    ),
+    config
+  );
+
+  await writeUserConfig(updatedConfig);
+  return operations;
 }
 
 function reportDegradedActivityLog(
@@ -433,6 +500,7 @@ const configCommand = program
   .option('--json', 'Print redacted configuration as JSON only')
   .action(async (options: { json?: boolean }) => {
     try {
+      await readUserConfig(join(homedir(), '.yardmaster', 'config.json'));
       const config = await loadConfig();
       const safeConfig = redactConfig(config);
 
@@ -454,11 +522,48 @@ configCommand
   .command('set')
   .description('Set an editable configuration value')
   .argument('<key>', 'Configuration key')
-  .argument('<value>', 'Configuration value')
-  .action(async (key: string, value: string) => {
+  .argument('[value]', 'Configuration value')
+  .option('--stdin', 'Read the configuration value from stdin')
+  .action(async (
+    key: string,
+    value: string | undefined,
+    options: { stdin?: boolean }
+  ) => {
     try {
-      await setUserConfig(key, value);
+      let inputValue: string;
+      if (key === 'ngrok.basic_auth') {
+        if (value !== undefined || !options.stdin) {
+          throw new Error('ngrok.basic_auth must be provided with --stdin');
+        }
+        inputValue = await readStdin();
+      } else {
+        if (options.stdin) {
+          throw new Error('--stdin is only supported for ngrok.basic_auth');
+        }
+        if (value === undefined) {
+          throw new Error(`A value is required for ${key}`);
+        }
+        inputValue = value;
+      }
+
+      await setUserConfig(key, inputValue);
       console.log(`${key}: set`);
+    } catch (error) {
+      console.error('Error:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+configCommand
+  .command('apply')
+  .description('Atomically apply editable configuration values from JSON')
+  .requiredOption('--stdin', 'Read the JSON object from stdin')
+  .action(async () => {
+    try {
+      const operations = await applyUserConfig(await readStdin());
+      for (const operation of operations) {
+        console.log(`${operation.key}: ${operation.action}`);
+      }
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : error);
       process.exit(1);

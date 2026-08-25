@@ -10,15 +10,20 @@ import { loadConfig } from './config.js';
 import { PortRegistry } from './registry.js';
 import { NgrokManager } from './ngrok-manager.js';
 import type { LogWriteResult } from './logger.js';
-import type { Config } from './types/index.js';
+import type {
+  Config,
+  ConfigFieldVisibilityOf
+} from './types/index.js';
 
 const program = new Command();
 type LeafPath<Value extends object> = {
   [Key in keyof Value & string]-?: NonNullable<Value[Key]> extends readonly unknown[]
     ? Key
-    : NonNullable<Value[Key]> extends object
-      ? `${Key}.${LeafPath<NonNullable<Value[Key]>>}`
-      : Key;
+    : NonNullable<Value[Key]> extends string | number | boolean
+      ? Key
+      : NonNullable<Value[Key]> extends object
+        ? `${Key}.${LeafPath<NonNullable<Value[Key]>>}`
+        : Key;
 }[keyof Value & string];
 
 type ValueAtPath<Value, Path extends string> =
@@ -39,14 +44,12 @@ type DisplayShape<Value> =
         ? 'string[]'
         : never;
 
-type SecretConfigPath = 'ngrok.auth_token' | 'ngrok.basic_auth';
-
 type ConfigDisplayPolicy = {
   [Path in LeafPath<Config>]: {
     readonly shape: DisplayShape<ValueAtPath<Config, Path>>;
-    readonly visibility: Path extends SecretConfigPath
-      ? 'secret'
-      : 'display-safe' | 'secret';
+    readonly visibility: ConfigFieldVisibilityOf<
+      ValueAtPath<Config, Path>
+    >;
   };
 };
 

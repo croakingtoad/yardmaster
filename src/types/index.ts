@@ -5,6 +5,26 @@
 
 import type { LogWriteResult } from '../logger.js';
 
+declare const configFieldVisibility: unique symbol;
+
+export type ConfigFieldVisibility = 'display-safe' | 'secret';
+
+/**
+ * Bind a configuration leaf to its display sensitivity without changing its
+ * runtime representation or requiring callers to wrap ordinary values.
+ */
+export type ConfigField<
+  Value,
+  Visibility extends ConfigFieldVisibility
+> = Value & { readonly [configFieldVisibility]?: Visibility };
+
+export type ConfigFieldVisibilityOf<Value> =
+  Value extends {
+    readonly [configFieldVisibility]?: infer Visibility;
+  }
+    ? Extract<Visibility, ConfigFieldVisibility>
+    : never;
+
 export interface PortRegistration {
   app_name: string;
   port: number;
@@ -28,24 +48,24 @@ export interface RegistryData {
 
 export interface Config {
   port_range: {
-    start: number;
-    end: number;
+    start: ConfigField<number, 'display-safe'>;
+    end: ConfigField<number, 'display-safe'>;
   };
   ngrok: {
-    auth_token: string;
-    region: string;
-    domain?: string;
-    basic_auth?: string;
-    ip_allow?: string[];
-    ip_deny?: string[];
+    auth_token: ConfigField<string, 'secret'>;
+    region: ConfigField<string, 'display-safe'>;
+    domain?: ConfigField<string, 'display-safe'>;
+    basic_auth?: ConfigField<string, 'secret'>;
+    ip_allow?: ConfigField<string[], 'display-safe'>;
+    ip_deny?: ConfigField<string[], 'display-safe'>;
   };
   registry: {
-    path: string;
+    path: ConfigField<string, 'display-safe'>;
   };
   server: {
-    name: string;
-    version: string;
-    description: string;
+    name: ConfigField<string, 'display-safe'>;
+    version: ConfigField<string, 'display-safe'>;
+    description: ConfigField<string, 'display-safe'>;
   };
 }
 

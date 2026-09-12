@@ -89,9 +89,34 @@ export class YardmasterServer {
                 type: 'boolean',
                 description:
                   'Set true to also expose the port publicly via an ngrok tunnel (requires ngrok auth token). Default false: registry entry only, no tunnel. Only enable when the user explicitly asks for a public/ngrok URL.'
+              },
+              notes: {
+                type: ['string', 'null'],
+                description:
+                  'Optional hostname or exposure details. Pass null to leave the registration explicitly unannotated.'
               }
             },
             required: ['app_name']
+          }
+        },
+        {
+          name: 'annotate_port',
+          description:
+            'Yardmaster port registry: update hostname or exposure notes on an existing active registration without releasing its port. Pass null to clear the notes.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              app_name: {
+                type: 'string',
+                description: 'Name of the application to annotate'
+              },
+              notes: {
+                type: ['string', 'null'],
+                description:
+                  'Hostname or exposure details for the application, or null to clear them'
+              }
+            },
+            required: ['app_name', 'notes']
           }
         },
         {
@@ -112,7 +137,7 @@ export class YardmasterServer {
         {
           name: 'query_ports',
           description:
-            'Yardmaster port registry: list all registered ports with their applications and ngrok URLs. Use when asked what ports are in use, what is running where, or to look up the port registry. Optionally filter by app name or port number.',
+            'Yardmaster port registry: list all registered ports with their applications, ngrok URLs, and notes. Notes carry hostname/exposure detail, so read them when determining how an app is reachable. Use when asked what ports are in use, what is running where, or to look up the port registry. Optionally filter by app name or port number.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -154,6 +179,9 @@ export class YardmasterServer {
           case 'register_port':
             return await this.handleRegisterPort(args as any);
 
+          case 'annotate_port':
+            return await this.handleAnnotatePort(args as any);
+
           case 'release_port':
             return await this.handleReleasePort(args as any);
 
@@ -187,12 +215,15 @@ export class YardmasterServer {
     app_name: string;
     desired_port?: number;
     tunnel?: boolean;
+    notes?: string | null;
   }) {
     this.ensureInitialized();
 
     const result = await this.registry!.registerPort(
       args.app_name,
-      args.desired_port
+      args.desired_port,
+      undefined,
+      args.notes
     );
 
     if (!result.success) {
@@ -268,6 +299,35 @@ export class YardmasterServer {
   }
 
   /**
+   * Handle annotate_port tool call
+   */
+  private async handleAnnotatePort(args: {
+    app_name: string;
+    notes: string | null;
+  }) {
+    this.ensureInitialized();
+    await this.registry!.setNotes(args.app_name, args.notes);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              success: true,
+              app_name: args.app_name,
+              notes: args.notes,
+              message: `Updated notes for '${args.app_name}'`
+            },
+            null,
+            2
+          )
+        }
+      ]
+    };
+  }
+
+  /**
    * Handle release_port tool call
    */
   private async handleReleasePort(args: { app_name: string }) {
@@ -326,7 +386,8 @@ export class YardmasterServer {
                 port: reg.port,
                 ngrok_url: reg.ngrok_url,
                 registered_at: reg.registered_at,
-                status: reg.status
+                status: reg.status,
+                notes: reg.notes
               }))
             },
             null,

@@ -32,6 +32,7 @@ export interface PortRegistration {
   pid: number | null;
   registered_at: string;
   status: 'active' | 'released';
+  notes?: string | null;
   monitor?: boolean;
   security?: {
     basic_auth: boolean;
@@ -80,6 +81,7 @@ export interface PortRegistrationResult {
   app_name: string;
   port: number;
   ngrok_url: string;
+  notes?: string | null;
   message?: string;
   activity_log?: LogWriteResult;
 }

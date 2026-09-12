@@ -9,7 +9,7 @@ import './test-entrypoint.js';
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -79,6 +79,194 @@ beforeEach(async () => {
 afterEach(async () => {
   await Promise.all(clients.map(async (client) => await client.close()));
   await rm(tmpDir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// notes MCP surface
+// ---------------------------------------------------------------------------
+
+describe('notes MCP surface', () => {
+  it('advertises note-aware tool schemas and query guidance', async () => {
+    const server = new YardmasterServer(activityLogger);
+    const client = await connectClient(server);
+    const { tools } = await client.listTools();
+
+    const registerTool = tools.find((tool) => tool.name === 'register_port');
+    assert.ok(registerTool?.inputSchema.properties?.notes);
+    assert.ok(!registerTool.inputSchema.required?.includes('notes'));
+
+    const annotateTool = tools.find((tool) => tool.name === 'annotate_port');
+    assert.ok(annotateTool?.inputSchema.properties?.app_name);
+    assert.ok(annotateTool.inputSchema.properties.notes);
+    assert.deepStrictEqual(annotateTool.inputSchema.required, [
+      'app_name',
+      'notes'
+    ]);
+
+    const queryTool = tools.find((tool) => tool.name === 'query_ports');
+    assert.match(queryTool?.description ?? '', /hostname\/exposure/i);
+  });
+
+  it('persists register_port notes and returns them from query_ports', async () => {
+    const server = new YardmasterServer(activityLogger);
+    await server.initialize(makeConfig(tmpDir));
+    const client = await connectClient(server);
+
+    const registration = await client.callTool({
+      name: 'register_port',
+      arguments: {
+        app_name: 'documented-app',
+        desired_port: 5101,
+        notes: 'available at app.example.test'
+      }
+    });
+    assert.strictEqual(registration.isError, undefined);
+
+    const query = await client.callTool({
+      name: 'query_ports',
+      arguments: { filter: 'documented-app' }
+    });
+    const result = JSON.parse(getTextContent(query)) as {
+      registrations: Array<{ notes?: string | null }>;
+    };
+    assert.strictEqual(
+      result.registrations[0].notes,
+      'available at app.example.test'
+    );
+  });
+
+  it('annotates an active registration without replacing it', async () => {
+    const server = new YardmasterServer(activityLogger);
+    await server.initialize(makeConfig(tmpDir));
+    const client = await connectClient(server);
+
+    await client.callTool({
+      name: 'register_port',
+      arguments: { app_name: 'stable-app', desired_port: 5102 }
+    });
+    const beforeQuery = await client.callTool({
+      name: 'query_ports',
+      arguments: { filter: 'stable-app' }
+    });
+
+    const annotation = await client.callTool({
+      name: 'annotate_port',
+      arguments: { app_name: 'stable-app', notes: 'localhost only' }
+    });
+    assert.strictEqual(annotation.isError, undefined);
+
+    const afterQuery = await client.callTool({
+      name: 'query_ports',
+      arguments: { filter: 'stable-app' }
+    });
+    const before = JSON.parse(getTextContent(beforeQuery)).registrations[0];
+    const after = JSON.parse(getTextContent(afterQuery)).registrations[0];
+    assert.deepStrictEqual(after, { ...before, notes: 'localhost only' });
+  });
+
+  it('returns the registry error when annotating an unknown app', async () => {
+    const server = new YardmasterServer(activityLogger);
+    await server.initialize(makeConfig(tmpDir));
+    const client = await connectClient(server);
+
+    const result = await client.callTool({
+      name: 'annotate_port',
+      arguments: { app_name: 'missing-app', notes: 'not stored' }
+    });
+
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(
+      getTextContent(result),
+      "Error: No active registration found for 'missing-app'"
+    );
+  });
+
+  it('rejects invalid annotation notes without changing persisted state', async () => {
+    const server = new YardmasterServer(activityLogger);
+    const config = makeConfig(tmpDir);
+    await server.initialize(config);
+    const client = await connectClient(server);
+
+    await client.callTool({
+      name: 'register_port',
+      arguments: { app_name: 'safe-app', desired_port: 5103 }
+    });
+    const before = await readFile(config.registry.path, 'utf8');
+
+    for (const notes of [42, { hostname: 'app.example.test' }]) {
+      const result = await client.callTool({
+        name: 'annotate_port',
+        arguments: { app_name: 'safe-app', notes }
+      });
+
+      assert.strictEqual(result.isError, true);
+      assert.match(getTextContent(result), /notes must be a string or null/i);
+      assert.strictEqual(await readFile(config.registry.path, 'utf8'), before);
+    }
+
+    const reloaded = new PortRegistry(config, activityLogger);
+    await reloaded.initialize();
+    assert.strictEqual(
+      reloaded.getRegistrationByApp('safe-app')?.notes,
+      undefined
+    );
+  });
+
+  it('rejects invalid registration notes without changing persisted state', async () => {
+    const server = new YardmasterServer(activityLogger);
+    const config = makeConfig(tmpDir);
+    await server.initialize(config);
+    const client = await connectClient(server);
+    const before = await readFile(config.registry.path, 'utf8');
+
+    const result = await client.callTool({
+      name: 'register_port',
+      arguments: { app_name: 'poison-app', notes: ['not', 'a', 'string'] }
+    });
+
+    assert.strictEqual(result.isError, true);
+    assert.match(getTextContent(result), /notes must be a string or null/i);
+    assert.strictEqual(await readFile(config.registry.path, 'utf8'), before);
+
+    const reloaded = new PortRegistry(config, activityLogger);
+    await reloaded.initialize();
+    assert.strictEqual(reloaded.queryPorts().total, 0);
+  });
+
+  it('rejects notes longer than 2000 characters before either mutation', async () => {
+    const server = new YardmasterServer(activityLogger);
+    const config = makeConfig(tmpDir);
+    await server.initialize(config);
+    const client = await connectClient(server);
+
+    await client.callTool({
+      name: 'register_port',
+      arguments: { app_name: 'safe-app', desired_port: 5104 }
+    });
+    const before = await readFile(config.registry.path, 'utf8');
+    const notes = 'x'.repeat(2001);
+
+    for (const request of [
+      { name: 'annotate_port', arguments: { app_name: 'safe-app', notes } },
+      { name: 'register_port', arguments: { app_name: 'other-app', notes } }
+    ]) {
+      const result = await client.callTool(request);
+      assert.strictEqual(result.isError, true);
+      assert.match(
+        getTextContent(result),
+        /notes must not exceed 2000 characters/i
+      );
+      assert.strictEqual(await readFile(config.registry.path, 'utf8'), before);
+    }
+
+    const reloaded = new PortRegistry(config, activityLogger);
+    await reloaded.initialize();
+    assert.strictEqual(
+      reloaded.getRegistrationByApp('safe-app')?.notes,
+      undefined
+    );
+    assert.strictEqual(reloaded.getRegistrationByApp('other-app'), null);
+  });
 });
 
 // ---------------------------------------------------------------------------

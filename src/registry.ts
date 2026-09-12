@@ -42,6 +42,10 @@ function isPortRegistration(value: unknown, key: string): value is PortRegistrat
   }
 
   const monitorIsValid = !('monitor' in value) || typeof value.monitor === 'boolean';
+  const notesIsValid =
+    !('notes' in value) ||
+    typeof value.notes === 'string' ||
+    value.notes === null;
   const securityIsValid =
     !('security' in value) ||
     (typeof value.security === 'object' &&
@@ -74,6 +78,7 @@ function isPortRegistration(value: unknown, key: string): value is PortRegistrat
     'status' in value &&
     (value.status === 'active' || value.status === 'released') &&
     monitorIsValid &&
+    notesIsValid &&
     securityIsValid
   );
 }
@@ -146,7 +151,8 @@ export class PortRegistry {
   async registerPort(
     appName: string,
     desiredPort?: number,
-    monitor?: boolean
+    monitor?: boolean,
+    notes?: string | null
   ): Promise<PortRegistrationResult> {
     const result = await this.mutate((data) => {
       const existing = Object.values(data.ports).find(
@@ -221,6 +227,7 @@ export class PortRegistry {
         registered_at: new Date().toISOString(),
         status: 'active',
         monitor,
+        notes,
         security: {
           basic_auth: !!this.config.ngrok.basic_auth,
           ip_restrictions: !!(
@@ -297,6 +304,32 @@ export class PortRegistry {
       registration.monitor = monitor;
       return { changed: true, result: true };
     });
+  }
+
+  /**
+   * Update notes on an active registration.
+  * @throws When the application is unknown or has been released.
+  */
+  async setNotes(appName: string, notes: string | null): Promise<void> {
+    if (typeof notes !== 'string' && notes !== null) {
+      throw new TypeError('notes must be a string or null');
+    }
+
+    const updated = await this.mutate((data) => {
+      const registration = Object.values(data.ports).find(
+        (reg) => reg.app_name === appName && reg.status === 'active'
+      );
+      if (!registration) {
+        return { changed: false, result: false };
+      }
+
+      registration.notes = notes;
+      return { changed: true, result: true };
+    });
+
+    if (!updated) {
+      throw new Error(`No active registration found for '${appName}'`);
+    }
   }
 
   /**

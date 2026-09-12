@@ -196,7 +196,12 @@ describe('PortRegistry.initialize()', () => {
   });
 
   it('loads an existing registry without overwriting it', async () => {
-    await registry.registerPort('preexisting', 4000);
+    await registry.registerPort(
+      'preexisting',
+      4000,
+      undefined,
+      'keep this note'
+    );
 
     // Create a new instance pointing at the same file
     const registry2 = new PortRegistry(config, activityLogger);
@@ -205,6 +210,37 @@ describe('PortRegistry.initialize()', () => {
     const reg = registry2.getRegistrationByApp('preexisting');
     assert.ok(reg, 'Preexisting registration should survive re-init');
     assert.strictEqual(reg!.port, 4000);
+    assert.strictEqual(reg!.notes, 'keep this note');
+  });
+
+  it('loads legacy registrations without notes', async () => {
+    const registeredAt = new Date().toISOString();
+    await writeFile(
+      config.registry.path,
+      JSON.stringify({
+        ports: {
+          4000: {
+            app_name: 'legacy',
+            port: 4000,
+            ngrok_url: null,
+            pid: null,
+            registered_at: registeredAt,
+            status: 'active'
+          }
+        },
+        version: '1.0.0',
+        last_updated: registeredAt
+      }),
+      'utf8'
+    );
+
+    const legacyRegistry = new PortRegistry(config, activityLogger);
+    await legacyRegistry.initialize();
+
+    assert.strictEqual(
+      legacyRegistry.getRegistrationByApp('legacy')?.port,
+      4000
+    );
   });
 
   for (const [name, invalidRegistry] of [
@@ -350,10 +386,19 @@ describe('PortRegistry.registerPort()', () => {
   });
 
   it('registers a specific port successfully', async () => {
-    const result = await registry.registerPort('app-a', 4001);
+    const result = await registry.registerPort(
+      'app-a',
+      4001,
+      undefined,
+      'local API'
+    );
     assert.strictEqual(result.success, true);
     assert.strictEqual(result.port, 4001);
     assert.strictEqual(result.app_name, 'app-a');
+    assert.strictEqual(
+      registry.getRegistrationByApp('app-a')?.notes,
+      'local API'
+    );
   });
 
   it('auto-assigns a port when none specified', async () => {
@@ -451,6 +496,84 @@ describe('PortRegistry.setMonitor()', () => {
   it('returns false when app does not exist', async () => {
     const ok = await registry.setMonitor('phantom', true);
     assert.strictEqual(ok, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setNotes()
+// ---------------------------------------------------------------------------
+
+describe('PortRegistry.setNotes()', () => {
+  it('updates notes without changing or releasing the registration', async () => {
+    await registry.registerPort('documented', 4009, true, 'old note');
+    const before = registry.getRegistrationByApp('documented');
+    assert.ok(before);
+
+    await registry.setNotes('documented', 'new note');
+
+    const after = registry.getRegistrationByApp('documented');
+    assert.ok(after);
+    assert.strictEqual(after.port, before.port);
+    assert.strictEqual(after.registered_at, before.registered_at);
+    assert.strictEqual(after.status, 'active');
+    assert.strictEqual(after.monitor, true);
+    assert.strictEqual(after.notes, 'new note');
+    assert.strictEqual(registry.isPortAvailable(4009), false);
+
+    const reloaded = new PortRegistry(config, activityLogger);
+    await reloaded.initialize();
+    assert.strictEqual(
+      reloaded.getRegistrationByApp('documented')?.notes,
+      'new note'
+    );
+  });
+
+  it('persists null notes through the locked mutation path', async () => {
+    await registry.registerPort('clear-note', 4009, undefined, 'temporary');
+    await registry.setNotes('clear-note', null);
+
+    const reloaded = new PortRegistry(config, activityLogger);
+    await reloaded.initialize();
+    assert.strictEqual(reloaded.getRegistrationByApp('clear-note')?.notes, null);
+  });
+
+  it('rejects a non-string value before changing persisted state', async () => {
+    await registry.registerPort('safe-note', 4009, undefined, 'unchanged');
+    const before = await readFile(config.registry.path, 'utf8');
+
+    await assert.rejects(
+      async () =>
+        await Reflect.apply(registry.setNotes, registry, ['safe-note', 42]),
+      /notes must be a string or null/i
+    );
+    assert.strictEqual(await readFile(config.registry.path, 'utf8'), before);
+
+    const reloaded = new PortRegistry(config, activityLogger);
+    await reloaded.initialize();
+    assert.strictEqual(
+      reloaded.getRegistrationByApp('safe-note')?.notes,
+      'unchanged'
+    );
+  });
+
+  it('rejects an unknown app without creating a registration', async () => {
+    await assert.rejects(
+      async () => await registry.setNotes('missing', 'note'),
+      /No active registration found for 'missing'/
+    );
+    assert.strictEqual(registry.getRegistrationByApp('missing'), null);
+  });
+
+  it('rejects a released app without restoring its reservation', async () => {
+    await registry.registerPort('released', 4009);
+    await registry.releasePort('released');
+
+    await assert.rejects(
+      async () => await registry.setNotes('released', 'note'),
+      /No active registration found for 'released'/
+    );
+    assert.strictEqual(registry.getRegistrationByApp('released'), null);
+    assert.strictEqual(registry.isPortAvailable(4009), true);
   });
 });
 

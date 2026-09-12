@@ -25,6 +25,7 @@ const (
 	ViewSettings       // Configuration feature
 	ViewLogs           // View Logs feature
 	ViewSecurityStatus // Security status feature
+	ViewSecurityConfig // Global ngrok security configuration feature
 )
 
 type tickMsg time.Time
@@ -76,6 +77,7 @@ type Model struct {
 	// Security Status State
 	SecurityStatusAppName string
 	SecurityStatus        *registry.SecurityInfo
+	SecurityConfig        *SecurityConfigState
 
 	// Reader
 	Reader  *registry.Reader
@@ -265,6 +267,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.CurrentView == ViewNewPort && m.Form != nil {
 		return m.handleFormInput(msg)
 	}
+	if m.CurrentView == ViewSecurityConfig && m.SecurityConfig != nil {
+		return m.handleSecurityConfigInput(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -343,7 +348,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.MenuCursor > 0 {
 					m.MenuCursor--
 					// Skip separator lines
-					if m.MenuCursor == 4 || m.MenuCursor == 7 {
+					if m.MenuCursor == 4 || m.MenuCursor == 8 {
 						m.MenuCursor--
 					}
 				}
@@ -369,11 +374,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.UpdateExportFilenameExtension()
 				}
 			} else if m.MenuOpen {
-				// Navigate menu (10 items total, 0-9)
-				if m.MenuCursor < 9 {
+				// Navigate menu (11 items total, 0-10)
+				if m.MenuCursor < 10 {
 					m.MenuCursor++
-					// Skip separator lines at indices 4 and 7
-					if m.MenuCursor == 4 || m.MenuCursor == 7 {
+					// Skip separator lines at indices 4 and 8
+					if m.MenuCursor == 4 || m.MenuCursor == 8 {
 						m.MenuCursor++
 					}
 				}
@@ -601,7 +606,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // HandleMenuSelection processes menu item selection
 func (m *Model) HandleMenuSelection() (*Model, tea.Cmd) {
-	// Menu items: 0-Register, 1-Release, 2-Security, 3-Logs, 4-SEP, 5-Config, 6-Export, 7-SEP, 8-About, 9-Quit
+	// Menu items: 0-Register, 1-Release, 2-Security, 3-Logs, 4-SEP,
+	// 5-Config, 6-Ngrok Security, 7-Export, 8-SEP, 9-About, 10-Quit.
 	switch m.MenuCursor {
 	case 0: // Register New Port
 		m.MenuOpen = false
@@ -656,7 +662,16 @@ func (m *Model) HandleMenuSelection() (*Model, tea.Cmd) {
 		m.Message = ""
 		return m, nil
 
-	case 6: // Export Registry
+	case 6: // Global Ngrok Security
+		m.MenuOpen = false
+		m.CurrentView = ViewSecurityConfig
+		state := NewSecurityConfigState()
+		m.SecurityConfig = &state
+		m.Message = ""
+		m.Error = nil
+		return m, loadSecurityConfigCmd(defaultYardmasterRunner)
+
+	case 7: // Export Registry
 		m.MenuOpen = false
 		m.CurrentView = ViewExport
 		m.Message = ""
@@ -669,12 +684,12 @@ func (m *Model) HandleMenuSelection() (*Model, tea.Cmd) {
 		m.ExportFilenameCursor = len(m.ExportFilename)
 		return m, nil
 
-	case 8: // About
+	case 9: // About
 		m.MenuOpen = false
 		m.CurrentView = ViewAbout
 		return m, nil
 
-	case 9: // Quit
+	case 10: // Quit
 		return m, tea.Quit
 
 	default:

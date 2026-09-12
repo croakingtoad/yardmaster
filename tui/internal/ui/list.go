@@ -232,10 +232,11 @@ func renderWithMenu(content string, m *models.Model) string {
 		{"View Logs", false},         // 3
 		{"──────────────", true},     // 4
 		{"Configuration", false},     // 5
-		{"Export Registry", false},   // 6
-		{"──────────────", true},     // 7
-		{"About", false},             // 8
-		{"Quit", false},              // 9
+		{"Ngrok Security", false},    // 6
+		{"Export Registry", false},   // 7
+		{"──────────────", true},     // 8
+		{"About", false},             // 9
+		{"Quit", false},              // 10
 	}
 
 	menu := headerStyle.Render("Admin Menu") + "\n\n"

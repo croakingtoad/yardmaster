@@ -227,6 +227,18 @@ describe('NgrokManager — integration (real ngrok)', () => {
   // NOTE: These tests create real ngrok tunnels and will consume quota.
 
   it(
+    'createTunnel throws a descriptive error for an invalid auth token',
+    { skip: INTEGRATION_SKIP_REASON },
+    async () => {
+      const mgr = makeManager(makeConfig('invalid-token-xyz'));
+      await assert.rejects(
+        async () => await mgr.createTunnel(4000, 'invalid-token-app'),
+        /Failed to create tunnel/
+      );
+    }
+  );
+
+  it(
     'createTunnel returns a public HTTPS URL',
     { skip: INTEGRATION_SKIP_REASON },
     async () => {
@@ -282,15 +294,4 @@ describe('NgrokManager — integration (real ngrok)', () => {
     }
   );
 
-  it(
-    'initialize throws a descriptive error for an invalid auth token',
-    { skip: INTEGRATION_SKIP_REASON },
-    async () => {
-      const mgr = makeManager(makeConfig('invalid-token-xyz'));
-      await assert.rejects(
-        async () => await mgr.initialize(),
-        /Failed to initialize ngrok/
-      );
-    }
-  );
 });

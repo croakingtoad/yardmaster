@@ -29,6 +29,7 @@ const configJsonFixturePath = fileURLToPath(new URL(
   import.meta.url
 ));
 const knownToken = 'qc-cli-secret-token-must-not-appear';
+const knownBasicAuth = 'qc-user:qc-cli-basic-auth-secret-must-not-appear';
 
 afterEach(async () => {
   await Promise.all(tempDirectories.splice(0).map((directory) => rm(directory, {
@@ -219,6 +220,22 @@ describe('CLI secret redaction', () => {
       assert.ok(!stderr.includes(knownToken));
     });
   }
+
+  it('config renders ngrok basic auth as a redaction marker', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+    tempDirectories.push(home);
+
+    const { stdout, stderr } = await runCli(['config'], home, {
+      NGROK_BASIC_AUTH: knownBasicAuth
+    });
+    const basicAuthPrefix = knownBasicAuth.substring(0, 8);
+
+    assert.ok(stdout.includes('"basic_auth": "(set)"'));
+    assert.ok(!stdout.includes(basicAuthPrefix));
+    assert.ok(!stderr.includes(basicAuthPrefix));
+    assert.ok(!stdout.includes(knownBasicAuth));
+    assert.ok(!stderr.includes(knownBasicAuth));
+  });
 
   it('redacts an unknown nested config field by default', async () => {
     const home = await createTemporaryHome();
@@ -757,4 +774,74 @@ describe('CLI config writes', () => {
     assert.strictEqual(unconfigured.code, 0, unconfigured.stderr);
     assert.ok(!unconfigured.stdout.includes('"basic_auth"'));
   });
+});
+
+describe('CLI display policy shape checks', () => {
+  for (const command of ['config', 'status'] as const) {
+    it(`${command} redacts an object nested beneath an allowlisted leaf`, async () => {
+      const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+      tempDirectories.push(home);
+      const configDirectory = join(home, '.yardmaster');
+      const unexpectedValue = 'nested-value-must-not-appear';
+
+      await mkdir(configDirectory, { recursive: true });
+      await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+        ngrok: { region: { unanticipated: unexpectedValue } }
+      }));
+
+      const { stdout, stderr } = await runCli([command], home);
+
+      const marker = command === 'config'
+        ? '"region": "(set)"'
+        : 'ngrok Region: (set)';
+      assert.ok(stdout.includes(marker));
+      assert.ok(!stdout.includes(unexpectedValue));
+      assert.ok(!stderr.includes(unexpectedValue));
+    });
+  }
+
+  for (const field of ['ip_allow', 'ip_deny'] as const) {
+    it(`config redacts ${field} when an array member is not a string`, async () => {
+      const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+      tempDirectories.push(home);
+      const configDirectory = join(home, '.yardmaster');
+      const unexpectedValue = `${field}-member-must-not-appear`;
+
+      await mkdir(configDirectory, { recursive: true });
+      await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+        ngrok: {
+          [field]: ['192.0.2.0/24', { unexpected: unexpectedValue }]
+        }
+      }));
+
+      const { stdout, stderr } = await runCli(['config'], home);
+
+      assert.ok(stdout.includes(`"${field}": "(set)"`));
+      assert.ok(!stdout.includes(unexpectedValue));
+      assert.ok(!stderr.includes(unexpectedValue));
+    });
+  }
+
+  for (const command of ['config', 'status'] as const) {
+    it(`${command} redacts a wrong-shaped numeric config leaf`, async () => {
+      const home = await mkdtemp(join(tmpdir(), 'yardmaster-cli-'));
+      tempDirectories.push(home);
+      const configDirectory = join(home, '.yardmaster');
+      const unexpectedValue = 'numeric-value-must-not-appear';
+
+      await mkdir(configDirectory, { recursive: true });
+      await writeFile(join(configDirectory, 'config.json'), JSON.stringify({
+        port_range: { start: unexpectedValue }
+      }));
+
+      const { stdout, stderr } = await runCli([command], home);
+
+      const marker = command === 'config'
+        ? '"start": "(set)"'
+        : 'Port Range: (set) - 9000';
+      assert.ok(stdout.includes(marker));
+      assert.ok(!stdout.includes(unexpectedValue));
+      assert.ok(!stderr.includes(unexpectedValue));
+    });
+  }
 });

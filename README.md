@@ -569,6 +569,34 @@ npm run build
 
 **Go Tests** cover TUI registry parsing, JSON error handling, and port filtering.
 
+#### Test layout
+
+TypeScript tests are deliberately co-located with the source they exercise as
+`src/*.test.ts`. Test doubles may live alongside that source when they let a
+test drive the real implementation. The TypeScript build preserves this layout
+under `dist/`, and the test script runs the emitted test modules. Moving every
+test into a separate test directory would not change behaviour and would break
+the established build-and-test layout.
+
+#### Supported testability APIs
+
+The following exports are supported APIs for exercising real server and ngrok
+code in tests. They do not change the production path: `start()` still loads
+the real configuration, connects the real stdio transport, and `NgrokManager`
+uses the real `@ngrok/ngrok` SDK by default.
+
+- `YardmasterServer` is exported so tests can construct the actual MCP server.
+- `YardmasterServer.initialize(config)` is public so tests can initialize that
+  actual server with controlled configuration.
+- `YardmasterServer.connect(transport)` is public so tests can connect it to a
+  controlled transport instead of the production stdio transport.
+- `NgrokSdk` is exported and `new NgrokManager(config, sdk)` accepts it as an
+  optional second argument so tests can drive `NgrokManager` with an SDK seam;
+  omitting it uses the real ngrok SDK.
+
+These seams exist to keep tests on the shipped implementation rather than on
+copies of its logic.
+
 Run tests:
 
 ```bash

@@ -213,6 +213,36 @@ describe('PortRegistry.initialize()', () => {
     assert.strictEqual(reg!.notes, 'keep this note');
   });
 
+  it('loads legacy registrations without notes', async () => {
+    const registeredAt = new Date().toISOString();
+    await writeFile(
+      config.registry.path,
+      JSON.stringify({
+        ports: {
+          4000: {
+            app_name: 'legacy',
+            port: 4000,
+            ngrok_url: null,
+            pid: null,
+            registered_at: registeredAt,
+            status: 'active'
+          }
+        },
+        version: '1.0.0',
+        last_updated: registeredAt
+      }),
+      'utf8'
+    );
+
+    const legacyRegistry = new PortRegistry(config, activityLogger);
+    await legacyRegistry.initialize();
+
+    assert.strictEqual(
+      legacyRegistry.getRegistrationByApp('legacy')?.port,
+      4000
+    );
+  });
+
   for (const [name, invalidRegistry] of [
     ['unparseable JSON', '{not-json'],
     ['JSON with an invalid registry shape', '{}']
@@ -489,6 +519,13 @@ describe('PortRegistry.setNotes()', () => {
     assert.strictEqual(after.monitor, true);
     assert.strictEqual(after.notes, 'new note');
     assert.strictEqual(registry.isPortAvailable(4009), false);
+
+    const reloaded = new PortRegistry(config, activityLogger);
+    await reloaded.initialize();
+    assert.strictEqual(
+      reloaded.getRegistrationByApp('documented')?.notes,
+      'new note'
+    );
   });
 
   it('persists null notes through the locked mutation path', async () => {

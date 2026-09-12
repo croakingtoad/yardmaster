@@ -311,6 +311,10 @@ export class PortRegistry {
   * @throws When the application is unknown or has been released.
   */
   async setNotes(appName: string, notes: string | null): Promise<void> {
+    if (typeof notes !== 'string' && notes !== null) {
+      throw new TypeError('notes must be a string or null');
+    }
+
     const updated = await this.mutate((data) => {
       const registration = Object.values(data.ports).find(
         (reg) => reg.app_name === appName && reg.status === 'active'

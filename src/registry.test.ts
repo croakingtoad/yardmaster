@@ -537,6 +537,25 @@ describe('PortRegistry.setNotes()', () => {
     assert.strictEqual(reloaded.getRegistrationByApp('clear-note')?.notes, null);
   });
 
+  it('rejects a non-string value before changing persisted state', async () => {
+    await registry.registerPort('safe-note', 4009, undefined, 'unchanged');
+    const before = await readFile(config.registry.path, 'utf8');
+
+    await assert.rejects(
+      async () =>
+        await Reflect.apply(registry.setNotes, registry, ['safe-note', 42]),
+      /notes must be a string or null/i
+    );
+    assert.strictEqual(await readFile(config.registry.path, 'utf8'), before);
+
+    const reloaded = new PortRegistry(config, activityLogger);
+    await reloaded.initialize();
+    assert.strictEqual(
+      reloaded.getRegistrationByApp('safe-note')?.notes,
+      'unchanged'
+    );
+  });
+
   it('rejects an unknown app without creating a registration', async () => {
     await assert.rejects(
       async () => await registry.setNotes('missing', 'note'),

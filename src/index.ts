@@ -24,6 +24,20 @@ import {
 } from './logger.js';
 import type { Config } from './types/index.js';
 
+const MAX_NOTES_LENGTH = 2000;
+
+function validateNotes(notes: unknown): string | null | undefined {
+  if (notes !== undefined && notes !== null && typeof notes !== 'string') {
+    throw new TypeError('notes must be a string or null');
+  }
+  if (typeof notes === 'string' && notes.length > MAX_NOTES_LENGTH) {
+    throw new TypeError(
+      `notes must not exceed ${MAX_NOTES_LENGTH} characters`
+    );
+  }
+  return notes;
+}
+
 /**
  * Main MCP Server
  */
@@ -215,15 +229,16 @@ export class YardmasterServer {
     app_name: string;
     desired_port?: number;
     tunnel?: boolean;
-    notes?: string | null;
+    notes?: unknown;
   }) {
+    const notes = validateNotes(args.notes);
     this.ensureInitialized();
 
     const result = await this.registry!.registerPort(
       args.app_name,
       args.desired_port,
       undefined,
-      args.notes
+      notes
     );
 
     if (!result.success) {
@@ -303,10 +318,14 @@ export class YardmasterServer {
    */
   private async handleAnnotatePort(args: {
     app_name: string;
-    notes: string | null;
+    notes?: unknown;
   }) {
+    const notes = validateNotes(args.notes);
+    if (notes === undefined) {
+      throw new TypeError('notes must be a string or null');
+    }
     this.ensureInitialized();
-    await this.registry!.setNotes(args.app_name, args.notes);
+    await this.registry!.setNotes(args.app_name, notes);
 
     return {
       content: [
@@ -316,7 +335,7 @@ export class YardmasterServer {
             {
               success: true,
               app_name: args.app_name,
-              notes: args.notes,
+              notes,
               message: `Updated notes for '${args.app_name}'`
             },
             null,

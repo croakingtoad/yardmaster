@@ -22,7 +22,14 @@ import {
   type Logger,
   type LogWriteResult
 } from './logger.js';
-import type { Config } from './types/index.js';
+import type {
+  AnnotatePortArgs,
+  Config,
+  GetAvailablePortArgs,
+  QueryPortsArgs,
+  RegisterPortArgs,
+  ReleasePortArgs
+} from './types/index.js';
 
 const MAX_NOTES_LENGTH = 2000;
 
@@ -191,19 +198,29 @@ export class YardmasterServer {
       try {
         switch (name) {
           case 'register_port':
-            return await this.handleRegisterPort(args as any);
+            return await this.handleRegisterPort(
+              args as unknown as RegisterPortArgs
+            );
 
           case 'annotate_port':
-            return await this.handleAnnotatePort(args as any);
+            return await this.handleAnnotatePort(
+              args as unknown as AnnotatePortArgs
+            );
 
           case 'release_port':
-            return await this.handleReleasePort(args as any);
+            return await this.handleReleasePort(
+              args as unknown as ReleasePortArgs
+            );
 
           case 'query_ports':
-            return await this.handleQueryPorts(args as any);
+            return await this.handleQueryPorts(
+              args as unknown as QueryPortsArgs
+            );
 
           case 'get_available_port':
-            return await this.handleGetAvailablePort(args as any);
+            return await this.handleGetAvailablePort(
+              args as unknown as GetAvailablePortArgs
+            );
 
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -225,12 +242,7 @@ export class YardmasterServer {
   /**
    * Handle register_port tool call
    */
-  private async handleRegisterPort(args: {
-    app_name: string;
-    desired_port?: number;
-    tunnel?: boolean;
-    notes?: unknown;
-  }) {
+  private async handleRegisterPort(args: RegisterPortArgs) {
     const notes = validateNotes(args.notes);
     this.ensureInitialized();
 
@@ -316,10 +328,7 @@ export class YardmasterServer {
   /**
    * Handle annotate_port tool call
    */
-  private async handleAnnotatePort(args: {
-    app_name: string;
-    notes?: unknown;
-  }) {
+  private async handleAnnotatePort(args: AnnotatePortArgs) {
     const notes = validateNotes(args.notes);
     if (notes === undefined) {
       throw new TypeError('notes must be a string or null');
@@ -349,7 +358,7 @@ export class YardmasterServer {
   /**
    * Handle release_port tool call
    */
-  private async handleReleasePort(args: { app_name: string }) {
+  private async handleReleasePort(args: ReleasePortArgs) {
     this.ensureInitialized();
     let tunnelActivityLog: LogWriteResult | null = null;
 
@@ -388,7 +397,7 @@ export class YardmasterServer {
   /**
    * Handle query_ports tool call
    */
-  private async handleQueryPorts(args: { filter?: string }) {
+  private async handleQueryPorts(args: QueryPortsArgs) {
     this.ensureInitialized();
 
     const result = this.registry!.queryPorts(args.filter);
@@ -420,10 +429,7 @@ export class YardmasterServer {
   /**
    * Handle get_available_port tool call
    */
-  private async handleGetAvailablePort(args: {
-    range_start?: number;
-    range_end?: number;
-  }) {
+  private async handleGetAvailablePort(args: GetAvailablePortArgs) {
     this.ensureInitialized();
 
     const port = this.registry!.getAvailablePort(

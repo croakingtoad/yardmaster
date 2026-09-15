@@ -12,7 +12,7 @@
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "cli": "node dist/cli.js",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src",
     "type-check": "tsc --noEmit",
     "test": "npm run build && node dist/live-state.test.js",
     "test:watch": "node -e \"console.error('test:watch is disabled because it bypasses the live-state guard; use npm test'); process.exit(1)\""

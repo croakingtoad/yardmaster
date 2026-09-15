@@ -98,3 +98,28 @@ export interface PortQueryResult {
   total: number;
   registrations: PortRegistration[];
 }
+
+export interface RegisterPortArgs {
+  app_name: string;
+  desired_port?: number;
+  tunnel?: boolean;
+  notes?: unknown;
+}
+
+export interface AnnotatePortArgs {
+  app_name: string;
+  notes?: unknown;
+}
+
+export interface ReleasePortArgs {
+  app_name: string;
+}
+
+export interface QueryPortsArgs {
+  filter?: string;
+}
+
+export interface GetAvailablePortArgs {
+  range_start?: number;
+  range_end?: number;
+}
